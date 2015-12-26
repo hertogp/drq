@@ -343,7 +343,6 @@ def query_rr(question):
 #   so when querying all records in a zone, it'll hang if the zone is HUGE.
 # - In that case use -t for tcp/53. TCP connections get closed & free up the src
 #   socket used for the queries.
-#
 
 def query_zone(zsource):
     'query for RR-s and return them as a zone'
