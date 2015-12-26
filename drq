@@ -42,7 +42,8 @@ usage: drq -a db.add -d db.ref [options]
  -q
     Query DNS to see of whether records proposed for addition (-a db.add)
     still need to be added (or not) and/or whether records proposed for deletion
-    (-d db.del) still need to be removed (or not).
+    (-d db.del) still need to be removed (or not). If no -r db.ref is used, this
+    option is implied (i.e. dns will be queried anyway).
 
  -c <num>
     Maximum number of concurrent sessions to use when sending out DNS queries.

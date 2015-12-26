@@ -92,3 +92,82 @@ usage: drq -a db.add -d db.ref [options]
     0, which doesn't clutter the reports too much.
 ```
 
+### example
+
+Small contrived example.  Suppose you have in add.db:
+
+```
+> cat add.add
+
+$ORIGIN example.com.
+www     IN  A   93.184.216.34
+addthis IN  A   10.10.10.1
+
+$ORIGIN acme.com.
+www     IN A  216.27.178.28
+addthis IN A  10.10.10.2
+```
+
+and in del.db:
+
+```
+> cat del.db
+
+$ORIGIN example.com.
+ftp     IN  A   10.10.10.3
+
+$ORIGIN acme.com.
+www     IN A  216.27.178.28
+```
+
+Then running `drq -a add.db -d del.db` yields:
+
+```
+======================================================================
+ RR-s from file
+ZADD:  4 RR-s from 'add.db'
+ZDEL:  2 RR-s from 'del.db'
+ZREF:  0 RR-s from None
+----------------------------------------------------------------------
+ REF trim
+ZREF:  0 RR-s after pruning irrelevant dns names
+======================================================================
+ TIMESTAMP drq vs SOA serials
+>> 2015-12-26, 14:00:04
+======================================================================
+ Retrieving ZADD names currently missing from ZREF ..
+ - retrieved 2 additional RR-s
+ - ZREF now has  2 RR-s after updating
+----------------------------------------------------------------------
+ Retrieving ZDEL names currently missing from ZREF..
+ - retrieved 1 addtional RR-s
+ - ZREF now has  2 RR-s after updating
+======================================================================
+ REPORTS
+----------------------------------------------------------------------
+ CONFLICTING ADD/DEL RR-s (1)
++- www.acme.com.                       0 IN A     216.27.178.28
+----------------------------------------------------------------------
+ ADD'd RR-s (2/4)
++! www.example.com.                    0 IN A     93.184.216.34
++! www.acme.com.                       0 IN A     216.27.178.28
+----------------------------------------------------------------------
+ NOT ADD'd RR-s (2/4)
++? addthis.example.com.                0 IN A     10.10.10.1
++? addthis.acme.com.                   0 IN A     10.10.10.2
+----------------------------------------------------------------------
+ DEL'd RR-s (1/2)
+-! ftp.example.com.                    0 IN A     10.10.10.3
+----------------------------------------------------------------------
+ NOT DEL'd RR-s (1/2)
+-? www.acme.com.                       0 IN A     216.27.178.28
+```
+
+Which basically says:
+
+- www.acme.com entry was listed (same entry) in both add/del db's
+- www.example.com and www.acme.com were already added (ie they were in dns)
+- not added were the addthis records, because they were not seen in dns
+- ftp.example.com was already deleted (at least not in dns right now)
+- www.acme.com is not yet deleted (still in dns)
+
