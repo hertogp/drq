@@ -1,0 +1,49 @@
+#!/usr/bin/env python
+
+# author : git.hertogp@gmail.com
+# license: see file UNLICENSE or <http://unlicense.org>
+
+'''
+Usage: cat broken-openVMS-file | fixovms > fixed-openVMS-file
+
+DNS admin sent *.db files for the zones he's running.  These were retrieved from
+openVMS via ftp (probably).  All files are 16384 bytes in size and seem to be
+formatted as raw datastreams containing:
+
+  - <lf> (0x0A) to end a line,
+  - <eof> (0x00) to end the file (shows up as ^@),
+  - stale data which fills out the file to 16385 bytes, after <eof> marker
+  - some 'empty' files (still 16384 bytes in size)
+    * first char is NOT <eof> marker, instead it's something like ^K^A or ^A
+    * these need to be filtered out as well
+    * verify these with grep ^V^A *.db*  (ie to get ^A type ^V^A)
+
+Furthermore, the DNS admin sent all the files, so we have multiple versions of
+the same <zone>.db in the form of <zone>.db;<version>.  The highest <version> of
+the zone-file has the highest zone serial number and is most recent.
+
+See http://www3.sympatico.ca/n.rieck/docs/openvms_notes_text_files.html
+
+To go from a directory full of <zone-x>.db;<versions>:
+
+$ unzip -V all-dns-zones.zip  # keep version numbers
+$ mkdir tmp
+$ for f in $(ls *.db*); do cat $f | fixovms > tmp/${f/\;*/}; done
+$ cd tmp
+$ cat *.db > all.db
+
+This will fix all version of a particular zone, but cat's the contents to
+the same tmp/<zone>.db file.  The highest version number is the last to be
+processed, so tmp/<zone>.db ends up containing the fixed contents of the most
+recent zone.db;<version>.
+'''
+
+import sys
+PRINTABLE = [chr(c) for c in range(ord(' '), 1+ord('~'))]
+PRINTABLE += "\t \r \n \f".split(' ')
+while True:
+    CHAR = sys.stdin.read(1)
+    if CHAR == chr(0): break                # EOF marker
+    if CHAR in PRINTABLE: sys.stdout.write(CHAR)
+    sys.stdout.flush()
+
