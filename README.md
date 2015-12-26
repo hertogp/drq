@@ -98,7 +98,7 @@ usage: drq -a db.add -d db.ref [options]
 Small contrived example.  Suppose you have in add.db:
 
 ```
-> cat add.add
+> cat add.db
 
 $ORIGIN example.com.
 www     IN  A   93.184.216.34
