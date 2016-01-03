@@ -2,8 +2,11 @@
 
 Basically a throwaway script to check some large requests to dns admins using
 zone file formats.  Since the zones were a bit messy and the admins a bit
-grumpy, drq was written to check the consistency of the requested
-additions/deletions to be performed on various zones under their control.
+grumpy, drq was written to check:
+
+- the consistency of the requested additions/deletions 
+- the need to add/delete the requested entries (some were already gone)
+- after reportedly being handled, check if it was done correctly.
 
 ### usage
 
