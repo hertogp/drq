@@ -501,7 +501,7 @@ def main():
     log(0, 'ZREF: %2d RR-s after pruning irrelevant dns names' % num_rrs(zref))
 
     # record timestamp & soa's on all zones/nameservers involved
-    log(0, BAR2, "TIMESTAMP drq vs SOA serials")
+    log(0, BAR2, "TIMESTAMP of drq run (for comparison with SOA serials)")
     log(0, '>>', datetime.datetime.now().strftime('%Y-%m-%d, %H:%M:%S'))
 
     if ARGS.q:
