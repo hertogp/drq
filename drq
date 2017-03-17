@@ -118,7 +118,7 @@ from multiprocessing import Pool
 class Container(object):
     '''ARGS container'''
     def __init__(self):
-        'set up defaults argument values'
+        'set up default argument values'
         self.r = None  # zref file handle
         self.a = None  # zadd file handle
         self.d = None  # zdel file handle
@@ -200,6 +200,7 @@ def csv_rr(ofh, zone, req_type, req_status):
                          req_status])
         print >> ofh, line
     if cleanup: ofh.close()
+
 
 
 
