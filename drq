@@ -4,7 +4,7 @@
 # license: see file LICENSE or <http://unlicense.org>
 
 '''
-Dns ReQuest checker
+Dns ReQuest checker - check intersections of add/del/ref zones
 
 usage: drq -a db.add -d db.ref [options]
 
@@ -17,7 +17,7 @@ usage: drq -a db.add -d db.ref [options]
  -r db.ref  zone file against which additions/removals are checked
  -q         query DNS to check add/del records (even if no -r db.ref was given)
  -c <num>   use <num> concurrent dns queries [default is 5]
- -n ns_ip   name server ip to be queried instead of default resolver
+ -n ns      name server ip to be queried instead of default resolver
  -t         use tcp/53 queries instead of udp/53 queries
  -p         include/create PTR-records for A-records to add/del
  -s         use strict checking
@@ -26,31 +26,39 @@ usage: drq -a db.add -d db.ref [options]
  -h         print this message and exit
 
 
+            -a db.ADD <-+----------------+
+                        | .a.       +------------------+-> -d db.DEL
+                        |           |.ad |         ..d |
+                        |      +--------------+        |
+                        |      |ra. |rad |r.d |        |
+                        |      |    +---------|--------+
+                        +------|---------+    |
+                               |r..       REF |
+                               +--------------+-> -r db.REF (or DNS or both)
+
  -a db.add
-    drq checks whether these records (zone-file format) exist or not and reports
-    them as ADD'd or NOT ADD'd (ie still to add).
+    The set of RR-s that should be added to DNS (bind zone file format)
 
  -d db.del
-    drq checks whether these records (zone-file format) exist or not and reports
-    them as DEL'd or NOT DEL'd (ie still to be deleted).
+    The set of RR-s that should be removed from DNS (bind zone file format)
 
  -r db.ref
-    drq uses these records as an off-line representation of DNS records
-    (zone-file format) against which to check add/delete requests.  If not
-    given, -q is implied.
+    Off-line representation of 'live' DNS records (if not given, -q is implied)
 
  -q
     Query DNS to see of whether records proposed for addition (-a db.add)
     still need to be added (or not) and/or whether records proposed for deletion
     (-d db.del) still need to be removed (or not). If no -r db.ref is used, this
-    option is implied (i.e. dns will be queried anyway).
+    option is implied (i.e. dns will be queried). This option can be used in
+    addition to specifying a -r db.ref as well, in this case it'll check SOA
+    records as well.
 
  -c <num>
     Maximum number of concurrent sessions to use when sending out DNS queries.
     Defaults to 5.  You might want to lower this if using an ssh tunnel to
     direct tcp-based queries via a stepping stone onto a dns server.
 
- -n ns_ip
+ -n ns
     Donot use the system's default resolver, use the nameserver at <ns_ip>
     instead.  Useful if your local system's idea of how to resolve names does
     not suit your purpose.
@@ -123,7 +131,9 @@ class Container(object):
         self.a = None  # zadd file handle
         self.d = None  # zdel file handle
         self.v = 0     # verbosity level
+        self.N = 'Default'
         self.n = dns.resolver.Resolver().nameservers[0] # name server ip
+        self._n = dns.resolver.Resolver().nameservers[0]
         self.t = False # use tcp (t=true) else udp (t=false) for dns queries
         self.s = False # strict checking
         self.o = None  # output file for csv formatted results
@@ -132,7 +142,7 @@ class Container(object):
         self.c = 5     # max 5 concurrent queries
         self.D = False # print Debug info
 
-# GLOBS
+#-- Globs
 BAR1 = '-'*70 + '\n'
 BAR2 = '='*70 + '\n'
 ARGS = Container()
@@ -145,7 +155,7 @@ def usage():
 def dbg(*words):
     'print dbg information to stderr'
     if not ARGS.D: return
-    print >> sys.stderr, '[drq:dbg]:' + ' '.join(str(w) for w in words)
+    print >> sys.stderr, 'dbg:drq.' + ' '.join(str(w) for w in words)
     sys.stderr.flush()
 
 def log(level=0, *words):
@@ -157,16 +167,39 @@ def log(level=0, *words):
 def log_soa_rdta(level, name, rdta):
     'log soa record for name(server) in one line to console'
     if rdta is None:
-        log(level, name, 'no (r)data available')
+        log(level,
+            ' -',
+            'no soa data available',
+            '|', name)
         return
 
-    log(level, rdta.mname, str(rdta.rname).replace('.', '@', 1),
+    log(level,
+        ' -',
+        rdta.mname, str(rdta.rname).replace('.', '@', 1),
         'serial %s,' % rdta.serial,
         'refresh %d(%s),' % (rdta.refresh, sec2str(rdta.refresh)),
         'retry %d(%s),' % (rdta.retry, sec2str(rdta.retry)),
         'expire %d(%s),' % (rdta.expire, sec2str(rdta.expire)),
         'min %d(%s)' % (rdta.minimum, sec2str(rdta.minimum)),
-        name)
+        '|', name)
+
+
+def log_opts(level, opts):
+    'log configuration settings to output on level 1'
+    log(level, BAR2, 'OPTIONS used by drq')
+    log(level, '> file with ADD-records,   -a', opts.a or "''")
+    log(level, '> file with DEL-records,   -d', opts.d or "''")
+    log(level, '> file with REF-records,   -r', opts.r or "''")
+    log(level, '> ns for REF-records,      -n', opts.N, opts.n)
+    log(level, '> auto-add ptr-records,    -p', opts.p)
+    log(level, '> max concurrent requests, -c', opts.c)
+    log(level, '> retrieve SOA-records,    -q', opts.q)
+    log(level, '> use 53/tcp for queries,  -t', opts.t)
+    log(level, '> use strict checking,     -s', opts.s)
+    log(level, '> provide debug output,    -D', opts.D)
+    log(level, '> verbosity of output,     -v', opts.v)
+
+
 
 def rep_rr(level, zone, prefix='', title=None):
     'report RR-s of zone to console with a prefix'
@@ -182,26 +215,31 @@ def rep_rr(level, zone, prefix='', title=None):
         if len(prefix) == 0: log(level, line)
         else: log(level, prefix, line)
 
-def csv_rr(ofh, zone, req_type, req_status):
-    'write request results to csv file'
+
+def csv_rr(ofh, zone, rr_type, rr_intersect, rr_status, desc, header=False):
+    'write RR intersection results to csv file'
     cleanup = False
     if zone is None: return
-    if type(ofh) == type((str, unicode)):
+
+    if type(ofh) in [str, unicode]:
         ofh = open(ofh, 'w')
         cleanup = True
-    if len(zone.nodes) == 0: return
-    print >> ofh, ';'.join('name type data request status'.split())
+
+    if header is True:
+        print >> ofh, ';'.join('name type data request intersection desc status'.split())
+
     for name, _, rdta in zone.iterate_rdatas(dns.rdatatype.ANY):
         if rdta.rdtype == dns.rdatatype.SOA: continue
         line = ';'.join([str(name),
                          dns.rdatatype.to_text(rdta.rdtype),
                          str(rdta),
-                         req_type,
-                         req_status])
+                         rr_type,
+                         rr_intersect,
+                         desc,
+                         rr_status])
         print >> ofh, line
+
     if cleanup: ofh.close()
-
-
 
 
 def sec2str(seconds):
@@ -220,6 +258,24 @@ def sec2str(seconds):
     if seconds: rv.append(',%ds' % seconds)
     return ','.join(rv)
 
+def qry_ns(ns):
+    'return (name, ip) for ns if possible, else (ns, ns) itself'
+    try:
+        # try to resolve ns to ip
+        ns_name = ns
+        ns_rrset = dns.resolver.query(ns_name, rdtype=dns.rdatatype.A)
+        ns_ip = ns_rrset.rrset.to_rdataset().items[0].address
+        if ns_name != ns_ip:
+            return (ns_name, ns_ip)
+
+        ns_ptr = dns.reversename.from_address(ns)
+        ns_rrset = dns.resolver.query(ns_ptr, rdtype=dns.rdatatype.PTR)
+        ns_name = ns_rrset.rrset.to_rdataset().items[0]
+        return (ns_name, ns_ip)
+
+    except dns.resolver.NXDOMAIN:
+        print '[drq: qry_ns] could not find name/ip for nameserver', ns
+        sys.exit(0)
 
 def do_opts(argv):
     'options and argument processing'
@@ -227,18 +283,20 @@ def do_opts(argv):
     # pylint: disable=too-many-branches
     # pylint: disable=too-many-instance-attributes, too-few-public-methods
     try:
-        options, positionals = getopt.gnu_getopt(argv, 'r:a:d:v:n:hsto:pqD')
+        options, positionals = getopt.gnu_getopt(argv, 'r:ha:d:v:n:so:pqc:tD')
     except getopt.GetoptError, e:
         print 'Error:', str(e)
         sys.exit(2)
+
     opts = Container()
+    opts.N, opts.n = qry_ns(opts.n)
     for opt, arg in options:
         if opt == '-r': opts.r = arg
         elif opt == '-h': usage()
         elif opt == '-a': opts.a = arg
         elif opt == '-d': opts.d = arg
         elif opt == '-v': opts.v = int(arg)
-        elif opt == '-n': opts.n = arg
+        elif opt == '-n': opts.N, opts.n = qry_ns(arg)
         elif opt == '-s': opts.s = True
         elif opt == '-o': opts.o = arg
         elif opt == '-p': opts.p = True
@@ -259,43 +317,67 @@ def num_rrs(zone):
     return sum(len(rds) for node in zone.nodes.values() for rds in node)
 
 def get_soas(*zones):
-    'return list of soa rr-s for all (sub)zones in the list of zones'
+    'return dict with list of soa rr-s for all (sub)zones known by target NS'
     # zoas[zone] -> [(name, ip, soa-rdta), ..]
     # - soa-rdata may be None is the name server did not respond
+    TGT = 'get_soas@%r' % ARGS.n
+    rslvr = dns.resolver.Resolver(filename='', configure=False)
+    rslvr.nameservers = [ARGS.n]  # use target Nameserver
     zoas = {}
+
     # loop through all DNS names in the zones & find the zone they're in.
     for name in set().union(*[z.keys() for z in zones if z is not None]):
         # SOA and NS rr-s have zone itself as name.
-        if name in zoas or name.parent() in zoas: continue
-        # FIXME: dns.resolver.zone_for_name should use the -n <ip> for resolving
-        rslvr = dns.resolver.Resolver(filename='', configure=False)
-        rslvr.nameservers = [ARGS.n]
-        zone_name = dns.resolver.zone_for_name(name, tcp=True, resolver=rslvr)
-        dbg('get_soas@%r: find zone: found zone:%r' % (ARGS.n, zone_name))
-        if zone_name in zoas: continue
-        dbg('get_soas: find zone: is a new zone', zone_name)
+        if name in zoas or name.parent() in zoas:
+            continue
+        try:
+            zone_name = dns.resolver.zone_for_name(name, resolver=rslvr)
+        except dns.resolver.NoRootSOA as e:
+            continue
+        except dns.resolver.NoNameservers as e:
+            continue
+
+        if zone_name is None or zone_name in zoas: continue
 
         # get NS list for each (new) zone_name
         nameservers = []
         soas = []
-        for _, _, rdta, _ in query_rr((zone_name, dns.rdatatype.NS, None)):
-            if rdta is None: continue
+
+        dbg(TGT, 'claims zone:', zone_name)
+        tgt_nameservers = query_rr((zone_name, dns.rdatatype.NS, ARGS.n))
+        if len(tgt_nameservers) < 1:
+            dbg(TGT, '- but has no NS-records for it?')
+
+        # query_rr -> [(name, ttl, rdta, err_msg), ..]
+        for _, _, rdta, tgt_errmsg in tgt_nameservers:
+            if rdta is None or len(tgt_errmsg) > 0: continue
             nameservers.append(rdta.target)
-            ns_ip = query_rr((rdta.target, dns.rdatatype.A, ARGS.n))[0][2].address
+            # Use system resolver to resolve NS names listed by ARGS.n
+            name, ttl, ns_dta, err_msg = query_rr((rdta.target,
+                                                   dns.rdatatype.A, ARGS._n))[0]
+            if ns_dta is None or len(err_msg) > 0:
+                # ARGS.n claims SOA, but no useable NS?
+                dbg(TGT, "- NS '%s' looks broken (%r)" %
+                    (rdta.target, err_msg))
+                soas.append((rdta.target, "<broken>", None))
+                continue
+
+            ns_ip = ns_dta.address
             ns_soa = query_rr((zone_name, dns.rdatatype.SOA, ns_ip))[0][2]
             soas.append((rdta.target, ns_ip, ns_soa))
+            dbg(TGT, "- NS '%s' [%s] soa<%s>" % (rdta.target, ns_ip, ns_soa))
 
         # add Master to NS-list if not already present
-        # (ProRail's pcdy12 master is usually not mentioned in the NS-list)
         # Skip the primaries for soas that could  not be queried on their NS's
         primaries = set([nis[2].mname for nis in soas if nis[2] is not None])
         if len(primaries) > 1:
             dbg('Multiple masters! for zone', zone_name, list(primaries))
-
         for primary in primaries:
+            dbg(TGT, "- NS '%s' is primary" % primary)
             if primary in nameservers: continue
-            dbg('Primary', primary, 'not listed as nameserver:', nameservers)
-            ns_ip = query_rr((primary, dns.rdatatype.A, None))[0][2].address
+            dbg(TGT, "- primary '%s' not in NS-s: %r" % (primary, nameservers))
+            # Use system resolver for Addres of primary nameserver
+            ns_ip = query_rr((primary, dns.rdatatype.A, ARGS._n))[0][2].address
             ns_soa = query_rr((zone_name, dns.rdatatype.SOA, ns_ip))[0][2]
             soas.append((primary, ns_ip, ns_soa))
 
@@ -306,13 +388,13 @@ def get_soas(*zones):
 def query_rr(question):
     'Get RRs [(name, ttl, rdta, errmsg),..] for question=(name,rdtype,at_ip)'
     name, rdtype, at_ip = question
-
     # sanity check name to resolve
     if name is None or len(name) < 1:
         return [(name, 0, None, 'skipping weird name')]
 
-    # fall back to default nameserver if no target ns was given
-    if at_ip is None: at_ip = ARGS.n
+    # fall back to ARGS.n ns ip address if no target ns was given
+    if at_ip is None: at_ip = ARGS._n  # fall back to system's default
+    # if at_ip is None: at_ip = ARGS.n
     errmsg = ''
     try:
         qry = dns.message.make_query(name, rdtype)
@@ -320,7 +402,8 @@ def query_rr(question):
         retval = [(name, rrset.ttl, rdta, '')
                   for rrset in ans.answer for rdta in rrset]
         retval = [elm for elm in retval if len(elm) > 0]
-        if len(retval) == 0: retval = [(name, 0, None, 'empty result')]
+        if len(retval) == 0:
+            retval = [(name, 0, None, 'empty result')]
 
     except dns.exception.Timeout: errmsg = 'timeout'
     except dns.resolver.NXDOMAIN: errmsg = 'nxdomain'
@@ -334,14 +417,10 @@ def query_rr(question):
 
     return retval
 
-# Note:
+# Notes query_zone:
 # - query_rr returns a list of (name, ttl, rdta, errmsg) for a given name.
-# - Unfortunately, rdta cannot be pickled (no __get/setstate__ methods) and thus
-#   cannot be returned from a child process.
-# - Hence we use multithreading instead of multiple processes.
-# - The latter would've been better since you can terminate a child-process
-#   after x-jobs (it'll respawn) to free up UDP sockets.
-# - Theads donot free up UDP sockets (probably needs to time out or something),
+# - uses multithreading instead of multiple processes.
+# - theads donot free up UDP sockets (probably needs to time out or something),
 #   so when querying all records in a zone, it'll hang if the zone is HUGE.
 # - In that case use -t for tcp/53. TCP connections get closed & free up the src
 #   socket used for the queries.
@@ -349,25 +428,29 @@ def query_rr(question):
 def query_zone(zsource):
     'query for RR-s and return them as a zone'
     zone = new_zone()
-    if zsource is None: return zone
-    if len(zsource.nodes) == 0: return zone
+    if zsource is None or len(zsource.nodes)==0: return zone
 
     questions = [[name, rds.rdtype, ARGS.n]
                  for name, rds in zsource.iterate_rdatasets()]
     dbg('qry_zone:', 'resolving %d DNS queries @ %r' % (len(questions), ARGS.n))
-
     pool = ThreadPool(5)
     answers = pool.map(query_rr, questions)
     dbg('qry_zone:', 'got %d answers' % len(answers))
 
-    for name, ttl, rdta, msg in [rr for answer in answers for rr in answer]:
-        if ARGS.D: dbg('qry_zone:', name, 'ttl:', ttl, 'rdta:', str(rdta))
-        if rdta is None or len(msg) > 0:
-            dbg('qry_zone:', 'got error %s (%s)' % (str(rdta), msg))
-            continue
-        newrds = zone.get_rdataset(name, rdta.rdtype, create=True)
-        newrds.add(rdta)
-        newrds.ttl = ttl
+    # for name, ttl, rdta, msg in [rr for answer in answers for rr in answer]:
+    for answer in answers:
+        for name, ttl, rdta, err_msg in answer:
+            # dbg('qry_zone: %s => ttl %d, rdta %r (%r)' %
+            #     (name.to_text(), ttl, rdta, err_msg or 'ok'))
+            if rdta is None or len(err_msg) > 0:
+                dbg('qry_zone:skip: %s => ttl %d, rdta %r (%r)' %
+                    (name.to_text(), ttl, rdta, err_msg or 'ok'))
+                continue
+            dbg('qry_zone: add: %s => ttl %d, rdta %r (%r)' %
+                (name.to_text(), ttl, rdta, err_msg or 'ok'))
+            newrds = zone.get_rdataset(name, rdta.rdtype, create=True)
+            newrds.add(rdta)
+            newrds.ttl = ttl
 
     return zone
 
@@ -471,64 +554,77 @@ def expand_ptr(zone):
 def main():
     'main'
     # NOTEs:
-    # o all zones are relative to '.'
-    # o so a zref,zadd,zdel zone may contain multiple SOA's (sub)domain-rr's
-    # o this script doesn't 'manage' zones, it checks a DNS request
+    # o all zones are relative to '.', hence zref,zadd,zdel zones may contain
+    #   multiple SOA's (sub)domain-rr's
+    # o the script doesn't manage zones, it checks presence/absence of DNS rr's
     # o If zref is read from file, it'll be pruned down to zadd+zdel names
-    # o Otherwise, zref will be populated by querying for zadd+zdel names
+    #   Otherwise, zref will be populated by querying for zadd+zdel names,
+    #   either via the system's resolver or against a nameserver given by -n
+    log_opts(2, ARGS)              # log all settings if requested
 
+    # log a timestamp & soa's on all zones/nameservers involved
+    log(0, BAR2, 'TIMESTAMP drq run',
+        datetime.datetime.now().strftime('%Y-%m-%d, %H:%M:%S'))
 
+    # Create initial add/del/ref zones.
     zadd = new_zone(ARGS.a)        # requested additions from file (if any)
     zdel = new_zone(ARGS.d)        # requested deletions from file (if any)
     zref = new_zone(ARGS.r)        # reference zone from file (if any)
-    log(0, BAR2, 'RR-s from file')
-    log(0, 'ZADD: %2d RR-s from %r' % (num_rrs(zadd), ARGS.a))
-    log(0, 'ZDEL: %2d RR-s from %r' % (num_rrs(zdel), ARGS.d))
-    log(0, 'ZREF: %2d RR-s from %r' % (num_rrs(zref), ARGS.r))
+    log(0, BAR2, 'ZONE creation')
+    log(0, ' - ZADD: %3d RR-s (file %r)' % (num_rrs(zadd), ARGS.a or ''))
+    log(0, ' - ZDEL: %3d RR-s (file %r)' % (num_rrs(zdel), ARGS.d or ''))
+    log(0, ' - ZREF: %3d RR-s (file %r)' % (num_rrs(zref), ARGS.r or ''))
 
-    # add ptr-rr's if requested
+    # add ptr-rr's based on a-rr's, if requested
     if ARGS.p:
+        old_size = num_rrs(zadd)
         zadd = expand_ptr(zadd)
+        log(0, ' - ZADD: %3d RR-s (auto-add %2d PTR RR-s)' %
+            (num_rrs(zadd), num_rrs(zadd)-old_size))
+
+        old_size = num_rrs(zdel)
         zdel = expand_ptr(zdel)
-        log(0, BAR1, 'PTR RR-s')
-        log(0, 'ZADD: %2d RR-s after PTR-expansion' % num_rrs(zadd))
-        log(0, 'ZDEL: %2d RR-s after PTR-expansion' % num_rrs(zdel))
+        log(0, ' - ZDEL: %3d RR-s (auto-add %2d PTR RR-s)' %
+            (num_rrs(zdel), num_rrs(zdel) - old_size))
 
-    log(0, BAR1, 'REF trim')
-    # zref = trim_zone(zref, set().union(*[z.keys() for z in (zadd, zdel)]))
-    # the above don't work on python 2.4.3 ...
+
+    old_size = num_rrs(zref)
     zref = trim_zone(zref, set().union(*[z.keys() for z in (zadd, zdel)]))
+    log(0, ' - ZREF: %3d RR-s (removed %d RR-s not in ZADD or ZDEL)'
+        % (num_rrs(zref) - old_size, num_rrs(zref)))
 
-    log(0, 'ZREF: %2d RR-s after pruning irrelevant dns names' % num_rrs(zref))
+    if ARGS.q or not ARGS.r:
+        # Add live ZADD RR-s to ZREF (if any)
+        zref_add = query_zone(zadd)
+        zref = union_zones(zref, zref_add)
+        log(0, ' - ZREF: %3d RR-s (added %2d live ZADD RR-s via %s [%s])' %
+            (num_rrs(zref), num_rrs(zref_add), ARGS.N, ARGS.n))
 
-    # record timestamp & soa's on all zones/nameservers involved
-    log(0, BAR2, "TIMESTAMP of drq run (for comparison with SOA serials)")
-    log(0, '>>', datetime.datetime.now().strftime('%Y-%m-%d, %H:%M:%S'))
+        # Add live ZDEL RR-s to ZREF (if any)
+        zref_del = query_zone(zdel)
+        zref = union_zones(zref, zref_del)
+        log(0, ' - ZREF: %3d RR-s (added %2d live ZDEL RR-s via %s [%s])' %
+            (num_rrs(zref), num_rrs(zref_del), ARGS.N, ARGS.n))
 
-    if ARGS.q:
-        zoas = get_soas(zref, zadd, zdel)
-        log(0, BAR1, 'found %s zones' % str(zoas.keys()))
+        rep_rr(1, zref_add, ' +', '- ZREF: added %d live ZADD RR-s' %
+               num_rrs(zref_add))
+        rep_rr(1, zref_del, ' +', '- ZREF: added %d live ZDEL RR-s' %
+               num_rrs(zref_del))
+
+    log(0, BAR1, 'final results')
+    log(0, ' - ZADD: %3d RR-s' % num_rrs(zadd))
+    log(0, ' - ZDEL: %3d RR-s' % num_rrs(zdel))
+    log(0, ' - ZREF: %3d RR-s' % num_rrs(zref))
+
+    # SOA checks at target NS
+    zoas = get_soas(zref, zadd, zdel)
+    if len(zoas.keys()):
+        log(0, BAR2, 'SOAs for:', ', '.join(str(z) for z in zoas.keys()))
         for zone, soas in zoas.items():
-            log(0, BAR1, 'SOAs for zone %s' % zone)
+            log(0, BAR1, 'SOA check for zone %s' % zone)
             for ns_name, ns_ip, ns_soa in soas:
-                log_soa_rdta(0, '@%s(%s)' % (ns_name, ns_ip), ns_soa)
+                log_soa_rdta(0, '@%s [%s]' % (ns_name, ns_ip), ns_soa)
 
-    # Query DNS for ZADD/ZDEL names currently missing from ZREF, only if no -r
-    # db.ref was given OR we were asked to query the network explicitly via -q
-    if not ARGS.r or ARGS.q:
-        log(0, BAR2, 'Retrieving ZADD names currently missing from ZREF ..')
-        zqry = query_zone(zadd)
-        log(0, ' - retrieved %d additional RR-s' % num_rrs(zqry))
-        rep_rr(3, zqry, 'q+', 'Found %d live ZADD RR-s' % num_rrs(zqry))
-        zref = union_zones(zref, zqry)
-        log(0, ' - ZREF now has %2d RR-s after updating' % num_rrs(zref))
-
-        log(0, BAR1, 'Retrieving ZDEL names currently missing from ZREF..')
-        zqry = query_zone(zdel)
-        log(0, ' - retrieved %d addtional RR-s' % num_rrs(zqry))
-        rep_rr(3, zqry, 'q-', 'Found %d live ZDEL RR-s' % num_rrs(zqry))
-        zref = union_zones(zref, zqry)
-        log(0, ' - ZREF now has %2d RR-s after updating' % num_rrs(zref))
 
     # if asked, log zone rr's that will be reasoned with
     if ARGS.D:
@@ -537,45 +633,48 @@ def main():
         rep_rr(0, zadd, '++', 'ADD RR-s')
         rep_rr(0, zdel, '--', 'DEL RR-s')
 
+    # trisect_zones(A,B) -> (RR-s in A, RR-s in both, RR-s in B)
     tri_both = trisect_zones(zadd, zdel) # add-only, add&del, del-only
-    tri_adds = trisect_zones(zref, zadd) # ref-only, added, NOT-ADDED
-    tri_dels = trisect_zones(zref, zdel) # ref-only, NOT-DELETED, deleted
+    tri_adds = trisect_zones(zref, zadd) # ref-only, ref&add, add-only
+    tri_dels = trisect_zones(zref, zdel) # ref-only, ref&del, del-only
 
     # log records that are both in ADDs and DELs (ie inconsistent)
-    log(0, BAR2, 'REPORTS')
+    log(0, BAR2, 'INTERSECTION reports')
 
-    rep_rr(0, tri_both[1], '+-',
-           'CONFLICTING ADD/DEL RR-s (%d)' % num_rrs(tri_both[1]))
+    rep_rr(0, tri_both[1], '.ad',
+           '%d RR-s in both ADD and DEL' % num_rrs(tri_both[1]))
 
     # strict checking: log RR-s with a with unexpected name/value mapping
     if ARGS.s:
-        zsuspect = trisect_zones(tri_adds[0], tri_dels[0])[1]
-        rep_rr(0, zsuspect, '<>', 'SURPLUS RR-s (%d)' % num_rrs(zsuspect))
+        tri_suspect = trisect_zones(tri_adds[0], tri_dels[0])
+        rep_rr(0, tri_suspect[1], 'r..', '%d SURPLUS (unexpected) RR-s' % num_rrs(zsuspect))
 
     # log results found for ZADD request(s)
-    rep_rr(0, tri_adds[1], '+!',
-           'ADD\'d RR-s (%d/%d)' % (num_rrs(tri_adds[1]), num_rrs(zadd)))
+    rep_rr(0, tri_adds[1], 'ra.',
+           '%d/%d ZADD RR-s also in ZREF (already present)' % (num_rrs(tri_adds[1]), num_rrs(zadd)))
 
-    rep_rr(0, tri_adds[2], '+?',
-           'NOT ADD\'d RR-s (%d/%d)' % (num_rrs(tri_adds[2]), num_rrs(zadd)))
+    rep_rr(0, tri_adds[2], '.a.',
+           '%d/%d ZADD RR-s not in ZREF (to be added)' % (num_rrs(tri_adds[2]), num_rrs(zadd)))
 
     # log results found for ZDEL request(s)
-    rep_rr(0, tri_dels[2], '-!',
-           'DEL\'d RR-s (%d/%d)' % (num_rrs(tri_dels[2]), num_rrs(zdel)))
+    rep_rr(0, tri_dels[2], '..d',
+           '%d/%d ZDEL RR-s not in ZREF (already absent)' % (num_rrs(tri_dels[2]), num_rrs(zdel)))
 
-    rep_rr(0, tri_dels[1], '-?',
-           'NOT DEL\'d RR-s (%d/%d)' % (num_rrs(tri_dels[1]), num_rrs(zdel)))
+    rep_rr(0, tri_dels[1], 'r.d',
+           '%d/%d ZADD RR-s also in ZREF (to be deleted)' % (num_rrs(tri_dels[1]), num_rrs(zdel)))
 
     # write results to csv file if ARGS.o is not None and writeable
     if not ARGS.o is None:
         ofh = open(ARGS.o, 'w')
-        csv_rr(ofh, tri_adds[1], 'add', 'ok')
-        csv_rr(ofh, tri_adds[2], 'add', 'not ok')
-        csv_rr(ofh, tri_dels[2], 'del', 'ok')
-        csv_rr(ofh, tri_dels[1], 'del', 'not ok')
-        csv_rr(ofh, tri_both[1], 'add/del', 'conflicting')
+        csv_rr(ofh, tri_adds[1], 'add', 'ra.', 'ok', 'added', header=True)
+        csv_rr(ofh, tri_dels[2], 'del', '..d', 'ok', 'deleted')
+        csv_rr(ofh, tri_adds[2], 'add', '.a.', 'not ok', 'to be added')
+        csv_rr(ofh, tri_dels[1], 'del', 'r.d', 'not ok', 'to be deleted')
+        csv_rr(ofh, tri_both[1], 'add/del', '.ad', 'not ok', 'conflict')
         if ARGS.s:
-            csv_rr(ofh, zsuspect, 'add/del', 'surplus')
+            csv_rr(ofh, zsuspect, 'add/del', 'r..', 'not ok', 'surplus')
+        csv_rr(ofh, trisect_zone(tri_adds[1], tri_dels[1]), 'add/del', 'rad',
+               'not ok', 'hmm')
         ofh.close()
 
 if __name__ == '__main__':
