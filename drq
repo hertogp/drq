@@ -4,9 +4,9 @@
 # license: see file LICENSE or <http://unlicense.org>
 
 '''
-Dns ReQuest checker - check intersections of add/del/ref zones
+Dns ReQuest checker - check intersections of ref/add/del-zones
 
-usage: drq -a db.add -d db.ref [options]
+usage: drq {-a db.add | -d db.ref} [options]
 
  with at least one of:
  -a db.add  zone file with records to add
@@ -15,7 +15,7 @@ usage: drq -a db.add -d db.ref [options]
  options include:
 
  -r db.ref  zone file against which additions/removals are checked
- -q         query DNS to check add/del records (even if no -r db.ref was given)
+ -q         query DNS to check add/del records (even if -r db.ref was given)
  -c <num>   use <num> concurrent dns queries [default is 5]
  -n ns      name server ip to be queried instead of default resolver
  -t         use tcp/53 queries instead of udp/53 queries
@@ -25,16 +25,6 @@ usage: drq -a db.add -d db.ref [options]
  -v <num>   verbosity level
  -h         print this message and exit
 
-
-            -a db.ADD <-+----------------+
-                        | .a.       +------------------+-> -d db.DEL
-                        |           |.ad |         ..d |
-                        |      +--------------+        |
-                        |      |ra. |rad |r.d |        |
-                        |      |    +---------|--------+
-                        +------|---------+    |
-                               |r..       REF |
-                               +--------------+-> -r db.REF (or DNS or both)
 
  -a db.add
     The set of RR-s that should be added to DNS (bind zone file format)
@@ -97,6 +87,36 @@ usage: drq -a db.add -d db.ref [options]
  -v <num>
     Controls the level of informational messages printed to stdout.  Defaults to
     0, which doesn't clutter the reports too much.
+
+
+ SUMMARY
+
+  Take db.add, db.del & db.ref and determine the intersections.
+
+  If no db.ref is given, it is created by trying to resolve the db.add and
+  db.del records, otherwise it uses the db.ref given.  Uses the system's default
+  resolver or the one supplied via -n <ns>.  Use -q to grow db.ref even if
+  given. Before intersections are calculated, db.ref only records are pruned.
+
+      -a db.ADD <-+---------+=====+---------+-> -d db.DEL
+                  |  1      |  2  |      3  |
+                  |    +---------------+    |
+                  |    | 4  |  5  |  6 |    |
+                  +----|----+=====+----|----+
+                       |       7       |
+                       +---------------+-> -r db.REF (or DNS or both)
+
+
+     Zx   RAD  Description        Meaning
+     --  ----  ------------------ -------------------------------------------
+     z1  '.a.' can be added       RR-s can be added as new to REF
+     z2  '.ad' possible conflict  RR-s not in REF so add/del is strange
+     z3  '..d' cannot delete      RR-s not in REF, so no removal possible
+     z4  'ra.' cannot add         RR-s in REF, so no new add possible
+     z5  'rad' possible updates   RR-s in ALL zones, so del/add is possible
+     z6  'r.d' can be deleted     RR-s can be deleted from REF
+     z7  'r..' ref surplus        RR-s weren't pruned for some reason
+
 '''
 
 # Disable some pylint warnings
@@ -155,7 +175,7 @@ def usage():
 def dbg(*words):
     'print dbg information to stderr'
     if not ARGS.D: return
-    print >> sys.stderr, 'dbg:drq.' + ' '.join(str(w) for w in words)
+    print >> sys.stderr, 'dbg:drq:' + ' '.join(str(w) for w in words)
     sys.stderr.flush()
 
 def log(level=0, *words):
@@ -171,21 +191,20 @@ def log_soa_rdta(level, name, rdta):
             ' -',
             'no soa data available',
             '|', name)
-        return
-
-    log(level,
-        ' -',
-        rdta.mname, str(rdta.rname).replace('.', '@', 1),
-        'serial %s,' % rdta.serial,
-        'refresh %d(%s),' % (rdta.refresh, sec2str(rdta.refresh)),
-        'retry %d(%s),' % (rdta.retry, sec2str(rdta.retry)),
-        'expire %d(%s),' % (rdta.expire, sec2str(rdta.expire)),
-        'min %d(%s)' % (rdta.minimum, sec2str(rdta.minimum)),
-        '|', name)
+    else:
+        log(level,
+            ' -',
+            rdta.mname, str(rdta.rname).replace('.', '@', 1),
+            'serial %s,' % rdta.serial,
+            'refresh %d(%s),' % (rdta.refresh, sec2str(rdta.refresh)),
+            'retry %d(%s),' % (rdta.retry, sec2str(rdta.retry)),
+            'expire %d(%s),' % (rdta.expire, sec2str(rdta.expire)),
+            'min %d(%s)' % (rdta.minimum, sec2str(rdta.minimum)),
+            '|', name)
 
 
 def log_opts(level, opts):
-    'log configuration settings to output on level 1'
+    'log configuration settings to output'
     log(level, BAR2, 'OPTIONS used by drq')
     log(level, '> file with ADD-records,   -a', opts.a or "''")
     log(level, '> file with DEL-records,   -d', opts.d or "''")
@@ -216,7 +235,7 @@ def rep_rr(level, zone, prefix='', title=None):
         else: log(level, prefix, line)
 
 
-def csv_rr(ofh, zone, rr_type, rr_intersect, rr_status, desc, header=False):
+def csv_rr(ofh, zone, rad, desc, header=False):
     'write RR intersection results to csv file'
     cleanup = False
     if zone is None: return
@@ -226,17 +245,15 @@ def csv_rr(ofh, zone, rr_type, rr_intersect, rr_status, desc, header=False):
         cleanup = True
 
     if header is True:
-        print >> ofh, ';'.join('name type data request intersection desc status'.split())
+        print >> ofh, ';'.join('name type data RAD description'.split())
 
     for name, _, rdta in zone.iterate_rdatas(dns.rdatatype.ANY):
         if rdta.rdtype == dns.rdatatype.SOA: continue
         line = ';'.join([str(name),
                          dns.rdatatype.to_text(rdta.rdtype),
                          str(rdta),
-                         rr_type,
-                         rr_intersect,
-                         desc,
-                         rr_status])
+                         rad,
+                         desc])
         print >> ofh, line
 
     if cleanup: ofh.close()
@@ -259,7 +276,7 @@ def sec2str(seconds):
     return ','.join(rv)
 
 def qry_ns(ns):
-    'return (name, ip) for ns if possible, else (ns, ns) itself'
+    'return (name, ip) for ns if possible, else return (ns, ns)'
     try:
         # try to resolve ns to ip
         ns_name = ns
@@ -274,7 +291,7 @@ def qry_ns(ns):
         return (ns_name, ns_ip)
 
     except dns.resolver.NXDOMAIN:
-        print '[drq: qry_ns] could not find name/ip for nameserver', ns
+        log(0, 'drq:FATAL:', 'could not find name/ip for nameserver', ns)
         sys.exit(0)
 
 def do_opts(argv):
@@ -337,7 +354,8 @@ def get_soas(*zones):
         except dns.resolver.NoNameservers as e:
             continue
 
-        if zone_name is None or zone_name in zoas: continue
+        if zone_name is None or zone_name in zoas:
+            continue
 
         # get NS list for each (new) zone_name
         nameservers = []
@@ -398,10 +416,15 @@ def query_rr(question):
     errmsg = ''
     try:
         qry = dns.message.make_query(name, rdtype)
-        ans = dns.query.tcp(qry, at_ip, timeout=None) if ARGS.t else dns.query.udp(qry, at_ip)
+
+        if ARGS.t:
+            ans = dns.query.tcp(qry, at_ip, timeout=3)
+        else:
+            ans = dns.query.udp(qry, at_ip, timeout=3)
+
         retval = [(name, rrset.ttl, rdta, '')
                   for rrset in ans.answer for rdta in rrset]
-        retval = [elm for elm in retval if len(elm) > 0]
+        retval = [elm for elm in retval if len(elm) > 0] # remove empty results
         if len(retval) == 0:
             retval = [(name, 0, None, 'empty result')]
 
@@ -413,7 +436,8 @@ def query_rr(question):
     except socket.error: errmsg = 'socket-error @%s' % at_ip
 
     # if Exception was caught, return 'no results'-answer w/ clue on error
-    if len(errmsg) > 0: retval = [(name, 0, None, errmsg)]
+    if len(errmsg) > 0:
+        retval = [(name, 0, None, errmsg)]
 
     return retval
 
@@ -594,7 +618,8 @@ def main():
         % (num_rrs(zref) - old_size, num_rrs(zref)))
 
     if ARGS.q or not ARGS.r:
-        # Add live ZADD RR-s to ZREF (if any)
+        # When requested (-q) or when no ZREF was given via -r db.ref:
+        # -> add live ZADD RR-s to ZREF (if any)
         zref_add = query_zone(zadd)
         zref = union_zones(zref, zref_add)
         log(0, ' - ZREF: %3d RR-s (added %2d live ZADD RR-s via %s [%s])' %
@@ -619,62 +644,74 @@ def main():
     # SOA checks at target NS
     zoas = get_soas(zref, zadd, zdel)
     if len(zoas.keys()):
-        log(0, BAR2, 'SOAs for:', ', '.join(str(z) for z in zoas.keys()))
+        log(0, BAR2, 'SOA list')
         for zone, soas in zoas.items():
-            log(0, BAR1, 'SOA check for zone %s' % zone)
+            log(0, BAR1, 'NS SOA %r' % str(zone))
             for ns_name, ns_ip, ns_soa in soas:
                 log_soa_rdta(0, '@%s [%s]' % (ns_name, ns_ip), ns_soa)
-
 
     # if asked, log zone rr's that will be reasoned with
     if ARGS.D:
         log(0, BAR2, 'DEBUG INFO')
-        rep_rr(0, zref, '==', 'REF RR-s')
-        rep_rr(0, zadd, '++', 'ADD RR-s')
-        rep_rr(0, zdel, '--', 'DEL RR-s')
+        rep_rr(0, zref, 'ref', 'REF RR-s')
+        rep_rr(0, zadd, 'add', 'ADD RR-s')
+        rep_rr(0, zdel, 'del', 'DEL RR-s')
 
-    # trisect_zones(A,B) -> (RR-s in A, RR-s in both, RR-s in B)
-    tri_both = trisect_zones(zadd, zdel) # add-only, add&del, del-only
-    tri_adds = trisect_zones(zref, zadd) # ref-only, ref&add, add-only
-    tri_dels = trisect_zones(zref, zdel) # ref-only, ref&del, del-only
+    z1, z25, z3 = trisect_zones(zadd, zdel)
+    z1, z4, _ = trisect_zones(z1, zref)
+    z3, z6, _ = trisect_zones(z3, zref)
+    z2, z5, _ = trisect_zones(z25, zref)
+    z7,  _, _ = trisect_zones(zref, union_zones(z4,z5,z6))
 
     # log records that are both in ADDs and DELs (ie inconsistent)
     log(0, BAR2, 'INTERSECTION reports')
+    rep_rr(0, z1, '.a.', '%d RR-s in ADD only (to be added)' % num_rrs(z1))
+    rep_rr(0, z2, '.ad', '%d RR-s in ADD & DEL (conflicts)' % num_rrs(z2))
+    rep_rr(0, z3, '..d', '%d RR-s in DEL only (cannot delete)' % num_rrs(z3))
+    rep_rr(0, z4, 'ra.', '%d RR-s in REF and ADD (cannot add)' % num_rrs(z4))
+    rep_rr(0, z5, 'rad', '%d RR-s in REF,ADD & DEL (updates?)' % num_rrs(z5))
+    rep_rr(0, z6, 'r.d', '%d RR-s in REF & DEL (to be deleted)' % num_rrs(z6))
+    rep_rr(0, z7, 'r..', '%d RR-s in ZREF only (surplus)' % num_rrs(z7))
 
-    rep_rr(0, tri_both[1], '.ad',
-           '%d RR-s in both ADD and DEL' % num_rrs(tri_both[1]))
+    log(0, BAR2, 'INTERSECTION summary')
+    #
+    log(0, BAR1,
+    '''
+    -a db.ADD <-+---------+=====+---------+-> -d db.DEL
+                |  1      |  2  |      3  |
+                |    +---------------+    |
+                |    | 4  |  5  |  6 |    |
+                +----|----+=====+----|----+
+                     |       7       |
+                     +---------------+-> -r db.REF (or DNS or both)
+    ''')
+    c = [-1, num_rrs(z1), num_rrs(z2), num_rrs(z3), num_rrs(z4),
+         num_rrs(z5), num_rrs(z6), num_rrs(z7)]
+    fmt = '{0:<5}|{1:^5}|{2:^5}|{3:^5}|{4}'
+    log(0, fmt.format(  '', 'REF', 'ADD', 'DEL', '').replace('|',' '))
+    log(0, fmt.format('','-----', '-----', '-----', '').replace('|','+'))
+    log(0, fmt.format('.a.',    '',  c[1],    '', ' z1 : can be added'))
+    log(0, fmt.format('.ad',    '',  c[2],  c[2], ' z2 : possible conflict'))
+    log(0, fmt.format('..d',    '',   '',   c[3], ' z3 : cannot delete'))
+    log(0, fmt.format('ra.',  c[4],  c[4],    '', ' z4 : cannot add'))
+    log(0, fmt.format('rad',  c[5],  c[5],  c[5], ' z5 : possible updates'))
+    log(0, fmt.format('r.d',  c[6],   '',   c[6], ' z6 : can be deleted'))
+    log(0, fmt.format('r..',  c[7],   '',     '', ' z7 : ref surplus'))
+    log(0, fmt.format('','-----', '-----', '-----', '').replace('|','+'))
+    log(0, fmt.format('tot', num_rrs(zref), num_rrs(zadd),
+                      num_rrs(zdel),'').replace('|',' '))
 
-    # strict checking: log RR-s with a with unexpected name/value mapping
-    if ARGS.s:
-        tri_suspect = trisect_zones(tri_adds[0], tri_dels[0])
-        rep_rr(0, tri_suspect[1], 'r..', '%d SURPLUS (unexpected) RR-s' % num_rrs(zsuspect))
-
-    # log results found for ZADD request(s)
-    rep_rr(0, tri_adds[1], 'ra.',
-           '%d/%d ZADD RR-s also in ZREF (already present)' % (num_rrs(tri_adds[1]), num_rrs(zadd)))
-
-    rep_rr(0, tri_adds[2], '.a.',
-           '%d/%d ZADD RR-s not in ZREF (to be added)' % (num_rrs(tri_adds[2]), num_rrs(zadd)))
-
-    # log results found for ZDEL request(s)
-    rep_rr(0, tri_dels[2], '..d',
-           '%d/%d ZDEL RR-s not in ZREF (already absent)' % (num_rrs(tri_dels[2]), num_rrs(zdel)))
-
-    rep_rr(0, tri_dels[1], 'r.d',
-           '%d/%d ZADD RR-s also in ZREF (to be deleted)' % (num_rrs(tri_dels[1]), num_rrs(zdel)))
 
     # write results to csv file if ARGS.o is not None and writeable
     if not ARGS.o is None:
         ofh = open(ARGS.o, 'w')
-        csv_rr(ofh, tri_adds[1], 'add', 'ra.', 'ok', 'added', header=True)
-        csv_rr(ofh, tri_dels[2], 'del', '..d', 'ok', 'deleted')
-        csv_rr(ofh, tri_adds[2], 'add', '.a.', 'not ok', 'to be added')
-        csv_rr(ofh, tri_dels[1], 'del', 'r.d', 'not ok', 'to be deleted')
-        csv_rr(ofh, tri_both[1], 'add/del', '.ad', 'not ok', 'conflict')
-        if ARGS.s:
-            csv_rr(ofh, zsuspect, 'add/del', 'r..', 'not ok', 'surplus')
-        csv_rr(ofh, trisect_zone(tri_adds[1], tri_dels[1]), 'add/del', 'rad',
-               'not ok', 'hmm')
+        csv_rr(ofh, z1, '.a.', 'can be added', header=True)
+        csv_rr(ofh, z2, '.ad', 'possible conflict')
+        csv_rr(ofh, z3, '..d', 'cannot delete')
+        csv_rr(ofh, z4, 'ra.', 'cannot add')
+        csv_rr(ofh, z5, 'rad', 'possible updates')
+        csv_rr(ofh, z6, 'r.d', 'can be deleted')
+        csv_rr(ofh, z7, 'r..', 'ref surplus')
         ofh.close()
 
 if __name__ == '__main__':
