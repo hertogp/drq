@@ -20,7 +20,7 @@ usage: drq {-a db.add | -d db.ref} [options]
  -n ns      name server ip to be queried instead of default resolver
  -t         use tcp/53 queries instead of udp/53 queries
  -p         include/create PTR-records for A-records to add/del
- -s         use strict checking
+ -s         strict checking, require ttl's to match as well
  -D         print debugging info
  -v <num>   verbosity level
  -h         print this message and exit
@@ -49,9 +49,9 @@ usage: drq {-a db.add | -d db.ref} [options]
     direct tcp-based queries via a stepping stone onto a dns server.
 
  -n ns
-    Donot use the system's default resolver, use the nameserver at <ns_ip>
-    instead.  Useful if your local system's idea of how to resolve names does
-    not suit your purpose.
+    Donot use the system's default resolver, use the nameserver ns (name or an
+    ip address) instead.  Useful if your local system's idea of how to resolve
+    names does not suit your purpose.
 
  -t
     Use tcp/53 to query nameservers instead of udp/53.  Mainly useful for
@@ -77,9 +77,8 @@ usage: drq {-a db.add | -d db.ref} [options]
     need to provide the A-records.
 
  -s
-    Strict checking: if a name maps to more than one address (and vice versa for
-    reverse mappings) report those as 'RESIDUAL'.  Useful for situations where
-    there should be only 1 mapping per name/address combination.
+    Strict checking requires ttl's to match as well when comparing RR-s. Not
+    used normally, but might be just what is needed to check TTL's for RR-s.
 
  -D
     Print some extra (debugging) info to stderr.
@@ -479,39 +478,44 @@ def query_zone(zsource):
     return zone
 
 def trisect_nodes(node1, node2):
-    '(relative complement node1, intersection & relative complement node 2)'
+    'return (relative complement node1, intersection, relative complement node 2)'
+    # Notes:
+    # - a dns.rdataset.Rdataset contains 0+ dns.rdata.Rdata elements
+    # - ttl lives at the set level, not element level
+    # - when strict checking is on (ARGS.s), require ttl's to match
     if node1 is None and node2 is None:
         return dns.node.Node(), dns.node.Node(), dns.node.Node()
-    if node2 is None: return node1, dns.node.Node(), dns.node.Node()
-    if node1 is None: return dns.node.Node(), dns.node.Node(), node2
+    if node2 is None:
+        return node1, dns.node.Node(), dns.node.Node()
+    if node1 is None:
+        return dns.node.Node(), dns.node.Node(), node2
 
-    # non-None nodes (might still be empty though)
+    # node1, node2 are not None, but might still be empty though
     n1x, n12, n2x = dns.node.Node(), dns.node.Node(), dns.node.Node()
 
-    # return set([(rds.rdclass,rds.rdtype) for node in nodes for rds in node])
     all_types = set([(x.rdclass, x.rdtype) for y in (node1, node2) for x in y])
     for rdclass, rdtype in all_types: # get_rdstypes(node1, node2):
         rds1 = node1.get_rdataset(rdclass, rdtype, create=False)
         rds2 = node2.get_rdataset(rdclass, rdtype, create=False)
+
         if rds1 is None and rds2 is None:
             continue                         # ignore both empty
         elif rds2 is None:
-            n1x.rdatasets.append(rds1)       # uniq to node1
+            n1x.rdatasets.append(rds1)       # unique to node1
         elif rds1 is None:
-            n2x.rdatasets.append(rds2)       # uniq to node2
-        else:                                # may overlap
-            rds12 = rds1.intersection(rds2)
-            if len(rds12) > 0:               # they do overlap
-                n12.rdatasets.append(rds12)
-                if len(rds1) > len(rds12): n1x.rdatasets.append(rds1 - rds12)
-                if len(rds2) > len(rds12): n2x.rdatasets.append(rds2 - rds12)
-            else:                            # they dont overlap
-                n1x.rdatasets.append(rds1)
-                n2x.rdatasets.append(rds2)
+            n2x.rdatasets.append(rds2)       # unique to node2
+        elif ARGS.s and rds1.ttl != rds2.ttl:
+            n1x.rdatasets.append(rds1)       # unique ttl for node1
+            n2x.rdatasets.append(rds2)       # unique ttl for node2
+        else:
+            n1x.rdatasets.append(rds1.difference(rds2))   # unique to rds1
+            n2x.rdatasets.append(rds2.difference(rds1))   # unique to rds2
+            n12.rdatasets.append(rds1.intersection(rds2)) # in both
+
     return n1x, n12, n2x
 
 def trisect_zones(zone1, zone2):
-    '(relative complement zone1, intersection & relative complement zone2)'
+    'return (relative complement zone1, intersection, relative complement zone2)'
     if zone1 is None and zone2 is None:
         return new_zone(), new_zone(), new_zone()
     if zone1 is None: return new_zone(), new_zone(), zone2
@@ -651,11 +655,10 @@ def main():
                 log_soa_rdta(0, '@%s [%s]' % (ns_name, ns_ip), ns_soa)
 
     # if asked, log zone rr's that will be reasoned with
-    if ARGS.D:
-        log(0, BAR2, 'DEBUG INFO')
-        rep_rr(0, zref, 'ref', 'REF RR-s')
-        rep_rr(0, zadd, 'add', 'ADD RR-s')
-        rep_rr(0, zdel, 'del', 'DEL RR-s')
+    log(1, BAR2, 'ZONES as created')
+    rep_rr(1, zref, 'ref', 'REF RR-s')
+    rep_rr(1, zadd, 'add', 'ADD RR-s')
+    rep_rr(1, zdel, 'del', 'DEL RR-s')
 
     z1, z25, z3 = trisect_zones(zadd, zdel)
     z1, z4, _ = trisect_zones(z1, zref)
@@ -667,8 +670,8 @@ def main():
     log(0, BAR2, 'INTERSECTION reports')
     rep_rr(0, z1, '.a.', '%d RR-s in ADD only (to be added)' % num_rrs(z1))
     rep_rr(0, z2, '.ad', '%d RR-s in ADD & DEL (conflicts)' % num_rrs(z2))
-    rep_rr(0, z3, '..d', '%d RR-s in DEL only (cannot delete)' % num_rrs(z3))
-    rep_rr(0, z4, 'ra.', '%d RR-s in REF and ADD (cannot add)' % num_rrs(z4))
+    rep_rr(0, z3, '..d', '%d RR-s in DEL only (already deleted)' % num_rrs(z3))
+    rep_rr(0, z4, 'ra.', '%d RR-s in REF and ADD (already added)' % num_rrs(z4))
     rep_rr(0, z5, 'rad', '%d RR-s in REF,ADD & DEL (updates?)' % num_rrs(z5))
     rep_rr(0, z6, 'r.d', '%d RR-s in REF & DEL (to be deleted)' % num_rrs(z6))
     rep_rr(0, z7, 'r..', '%d RR-s in ZREF only (surplus)' % num_rrs(z7))
@@ -691,9 +694,9 @@ def main():
     log(0, fmt.format(  '', 'REF', 'ADD', 'DEL', '').replace('|',' '))
     log(0, fmt.format('','-----', '-----', '-----', '').replace('|','+'))
     log(0, fmt.format('.a.',    '',  c[1],    '', ' z1 : can be added'))
-    log(0, fmt.format('.ad',    '',  c[2],  c[2], ' z2 : possible conflict'))
-    log(0, fmt.format('..d',    '',   '',   c[3], ' z3 : cannot delete'))
-    log(0, fmt.format('ra.',  c[4],  c[4],    '', ' z4 : cannot add'))
+    log(0, fmt.format('.ad',    '',  c[2],  c[2], ' z2 : add/del conflict'))
+    log(0, fmt.format('..d',    '',   '',   c[3], ' z3 : already deleted'))
+    log(0, fmt.format('ra.',  c[4],  c[4],    '', ' z4 : already added'))
     log(0, fmt.format('rad',  c[5],  c[5],  c[5], ' z5 : possible updates'))
     log(0, fmt.format('r.d',  c[6],   '',   c[6], ' z6 : can be deleted'))
     log(0, fmt.format('r..',  c[7],   '',     '', ' z7 : ref surplus'))
