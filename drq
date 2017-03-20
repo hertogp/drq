@@ -184,48 +184,47 @@ def log(level=0, *words):
     sys.stdout.flush()
 
 def log_soa_rdta(level, name, rdta):
-    'log soa record for name(server) in one line to console'
+    'log soa record for name(server)'
     if rdta is None:
-        log(level,
-            ' -',
-            'no soa data available',
-            '|', name)
+        log(level, '- `%s`' % name)
+        log(level, '    + no soa data available')
     else:
+        log(level, '- `%s`' % name)
         log(level,
-            ' -',
-            rdta.mname, str(rdta.rname).replace('.', '@', 1),
-            'serial %s,' % rdta.serial,
-            'refresh %d(%s),' % (rdta.refresh, sec2str(rdta.refresh)),
-            'retry %d(%s),' % (rdta.retry, sec2str(rdta.retry)),
-            'expire %d(%s),' % (rdta.expire, sec2str(rdta.expire)),
-            'min %d(%s)' % (rdta.minimum, sec2str(rdta.minimum)),
-            '|', name)
+            '\n    + *primary* `%s`' % rdta.mname,
+            '\n    + *contact* `%s`' % str(rdta.rname).replace('.', '@', 1),
+            '\n    + *serial* `%s`,' % rdta.serial,
+            '\n    + *refresh* `%d(%s)`,' % (rdta.refresh, sec2str(rdta.refresh)),
+            '\n    + *retry* `%d(%s)`,' % (rdta.retry, sec2str(rdta.retry)),
+            '\n    + *expire* `%d(%s)`,' % (rdta.expire, sec2str(rdta.expire)),
+            '\n    + *min* `%d(%s)`' % (rdta.minimum, sec2str(rdta.minimum)))
 
 
 def log_opts(level, opts):
     'log configuration settings to output'
-    log(level, BAR2, 'OPTIONS used by drq')
-    log(level, '> file with ADD-records,   -a', opts.a or "''")
-    log(level, '> file with DEL-records,   -d', opts.d or "''")
-    log(level, '> file with REF-records,   -r', opts.r or "''")
-    log(level, '> ns for REF-records,      -n', opts.N, opts.n)
-    log(level, '> auto-add ptr-records,    -p', opts.p)
-    log(level, '> max concurrent requests, -c', opts.c)
-    log(level, '> retrieve SOA-records,    -q', opts.q)
-    log(level, '> use 53/tcp for queries,  -t', opts.t)
-    log(level, '> use strict checking,     -s', opts.s)
-    log(level, '> provide debug output,    -D', opts.D)
-    log(level, '> verbosity of output,     -v', opts.v)
-
+    log(level, '\n# OPTIONS used by drq\n')
+    log(level, '- file with ADD-records,   -a', opts.a or "''")
+    log(level, '- file with DEL-records,   -d', opts.d or "''")
+    log(level, '- file with REF-records,   -r', opts.r or "''")
+    log(level, '- ns for REF-records,      -n', opts.N, opts.n)
+    log(level, '- auto-add ptr-records,    -p', opts.p)
+    log(level, '- max concurrent requests, -c', opts.c)
+    log(level, '- force retrieval for REF, -q', opts.q)
+    log(level, '- use 53/tcp for queries,  -t', opts.t)
+    log(level, '- use strict checking,     -s', opts.s)
+    log(level, '- provide debug output,    -D', opts.D)
+    log(level, '- verbosity of output,     -v', opts.v)
 
 
 def rep_rr(level, zone, prefix='', title=None):
     'report RR-s of zone to console with a prefix'
     if level > ARGS.v: return
-    if title is not None: log(level, BAR1, title)
-    if len(zone.nodes) == 0: return
+    if title is not None: log(level, title)
+    if len(zone.nodes) == 0:
+        log(level, '`None`')
+        return
     for name, ttl, rdta in zone.iterate_rdatas(dns.rdatatype.ANY):
-        line = '%-30s %6d %s %-5s %s' % (name,
+        line = '`%-30s %6d %s %-5s %s`' % (name,
                                         ttl,
                                         dns.rdataclass.to_text(rdta.rdclass),
                                         dns.rdatatype.to_text(rdta.rdtype),
@@ -588,77 +587,89 @@ def main():
     # o If zref is read from file, it'll be pruned down to zadd+zdel names
     #   Otherwise, zref will be populated by querying for zadd+zdel names,
     #   either via the system's resolver or against a nameserver given by -n
-    log_opts(2, ARGS)              # log all settings if requested
 
     # log a timestamp & soa's on all zones/nameservers involved
-    log(0, BAR2, 'TIMESTAMP drq run',
-        datetime.datetime.now().strftime('%Y-%m-%d, %H:%M:%S'))
+    log(0, '---\n', 'title: Dns ReQuest check\n',
+        'author: at `%s [%s]`\n' % (ARGS.N, ARGS.n),
+        'date: %s' % datetime.datetime.now().strftime('%Y-%m-%d, %H:%M:%S'),
+        '\n...\n')
+    # log(0, '# TIMESTAMP')
+    # log(0, 'drq ran at `%s`' %
+    #     datetime.datetime.now().strftime('%Y-%m-%d, %H:%M:%S'))
+
+    log_opts(2, ARGS)              # log all settings if requested
 
     # Create initial add/del/ref zones.
     zadd = new_zone(ARGS.a)        # requested additions from file (if any)
     zdel = new_zone(ARGS.d)        # requested deletions from file (if any)
     zref = new_zone(ARGS.r)        # reference zone from file (if any)
-    log(0, BAR2, 'ZONE creation')
-    log(0, ' - ZADD: %3d RR-s (file %r)' % (num_rrs(zadd), ARGS.a or ''))
-    log(0, ' - ZDEL: %3d RR-s (file %r)' % (num_rrs(zdel), ARGS.d or ''))
-    log(0, ' - ZREF: %3d RR-s (file %r)' % (num_rrs(zref), ARGS.r or ''))
+    log(0, '\n# ZONE creation')
+    log(0, '\n## From file\n')
+    log(0, '- ZADD: `%3d` RR-s from file `%s`' % (num_rrs(zadd), ARGS.a or ''))
+    log(0, '- ZDEL: `%3d` RR-s from file `%s`' % (num_rrs(zdel), ARGS.d or ''))
+    log(0, '- ZREF: `%3d` RR-s from file `%s`' % (num_rrs(zref), ARGS.r or ''))
 
     # add ptr-rr's based on a-rr's, if requested
     if ARGS.p:
+        log(0, '\n## Auto-adding PTR RR-s\n')
         old_size = num_rrs(zadd)
         zadd = expand_ptr(zadd)
-        log(0, ' - ZADD: %3d RR-s (auto-add %2d PTR RR-s)' %
+        log(0, '- ZADD now `%3d` RR-s by auto-adding `%2d` PTR RR-s' %
             (num_rrs(zadd), num_rrs(zadd)-old_size))
 
         old_size = num_rrs(zdel)
         zdel = expand_ptr(zdel)
-        log(0, ' - ZDEL: %3d RR-s (auto-add %2d PTR RR-s)' %
+        log(0, '- ZDEL: now `%3d` RR-s by auto-adding `%2d` PTR RR-s' %
             (num_rrs(zdel), num_rrs(zdel) - old_size))
 
 
     old_size = num_rrs(zref)
     zref = trim_zone(zref, set().union(*[z.keys() for z in (zadd, zdel)]))
-    log(0, ' - ZREF: %3d RR-s (removed %d RR-s not in ZADD or ZDEL)'
+    log(0, '\n## Pruning superfluous RR-s from ZREF\n')
+    log(0, '- ZREF: now `%3d` RR-s by pruning `%d` RR-s not in ZADD or ZDEL'
         % (num_rrs(zref) - old_size, num_rrs(zref)))
 
     if ARGS.q or not ARGS.r:
-        # When requested (-q) or when no ZREF was given via -r db.ref:
-        # -> add live ZADD RR-s to ZREF (if any)
+        # only if requested (-q) or no ZREF was given via -r db.ref
+        log(0, '\n## Expand ZREF with RR-s that are actually live\n')
+        # Add live ZADD RR-s to ZREF (if any)
         zref_add = query_zone(zadd)
         zref = union_zones(zref, zref_add)
-        log(0, ' - ZREF: %3d RR-s (added %2d live ZADD RR-s via %s [%s])' %
+        log(0, '- ZREF: now `%3d` RR-s by adding `%2d` live ZADD RR-s via %s [%s])' %
             (num_rrs(zref), num_rrs(zref_add), ARGS.N, ARGS.n))
+        if num_rrs(zref_add):
+            rep_rr(3, zref_add, '    #.', '- ZREF: added `%d` live ZADD RR-s' %
+                   num_rrs(zref_add))
 
         # Add live ZDEL RR-s to ZREF (if any)
         zref_del = query_zone(zdel)
         zref = union_zones(zref, zref_del)
-        log(0, ' - ZREF: %3d RR-s (added %2d live ZDEL RR-s via %s [%s])' %
+        log(0, '- ZREF: now `%3d` RR-s by adding `%2d` live ZDEL RR-s via %s [%s])' %
             (num_rrs(zref), num_rrs(zref_del), ARGS.N, ARGS.n))
+        if num_rrs(zref_del):
+            rep_rr(3, zref_del, '    #.', '- ZREF: added `%d` live ZDEL RR-s' %
+                   num_rrs(zref_del))
 
-        rep_rr(1, zref_add, ' +', '- ZREF: added %d live ZADD RR-s' %
-               num_rrs(zref_add))
-        rep_rr(1, zref_del, ' +', '- ZREF: added %d live ZDEL RR-s' %
-               num_rrs(zref_del))
+    log(0, '\n## Final results\n')
+    log(0, '- ZADD: `%3d` RR-s' % num_rrs(zadd))
+    log(0, '- ZDEL: `%3d` RR-s' % num_rrs(zdel))
+    log(0, '- ZREF: `%3d` RR-s' % num_rrs(zref))
 
-    log(0, BAR1, 'final results')
-    log(0, ' - ZADD: %3d RR-s' % num_rrs(zadd))
-    log(0, ' - ZDEL: %3d RR-s' % num_rrs(zdel))
-    log(0, ' - ZREF: %3d RR-s' % num_rrs(zref))
+    # if asked, log zone rr's that will be reasoned with
+    log(1, '\n# ZONES as created')
+    rep_rr(1, zadd, '#.', '\n## ADD RR-s (from file)\n')
+    rep_rr(1, zdel, '#.', '\n## DEL RR-s (from file)\n')
+    rep_rr(1, zref, '#.', '\n## REF RR-s (from file/dns)\n')
 
     # SOA checks at target NS
     zoas = get_soas(zref, zadd, zdel)
     if len(zoas.keys()):
-        log(0, BAR2, 'SOA list')
+        log(0, '\n# SOA listings')
         for zone, soas in zoas.items():
-            log(0, BAR1, 'NS SOA %r' % str(zone))
+            log(0, '\n## soas `%s`' % str(zone))
             for ns_name, ns_ip, ns_soa in soas:
                 log_soa_rdta(0, '@%s [%s]' % (ns_name, ns_ip), ns_soa)
 
-    # if asked, log zone rr's that will be reasoned with
-    log(1, BAR2, 'ZONES as created')
-    rep_rr(1, zref, 'ref', 'REF RR-s')
-    rep_rr(1, zadd, 'add', 'ADD RR-s')
-    rep_rr(1, zdel, 'del', 'DEL RR-s')
 
     z1, z25, z3 = trisect_zones(zadd, zdel)
     z1, z4, _ = trisect_zones(z1, zref)
@@ -667,19 +678,11 @@ def main():
     z7,  _, _ = trisect_zones(zref, union_zones(z4,z5,z6))
 
     # log records that are both in ADDs and DELs (ie inconsistent)
-    log(0, BAR2, 'INTERSECTION reports')
-    rep_rr(0, z1, '.a.', '%d RR-s in ADD only (to be added)' % num_rrs(z1))
-    rep_rr(0, z2, '.ad', '%d RR-s in ADD & DEL (conflicts)' % num_rrs(z2))
-    rep_rr(0, z3, '..d', '%d RR-s in DEL only (already deleted)' % num_rrs(z3))
-    rep_rr(0, z4, 'ra.', '%d RR-s in REF and ADD (already added)' % num_rrs(z4))
-    rep_rr(0, z5, 'rad', '%d RR-s in REF,ADD & DEL (updates?)' % num_rrs(z5))
-    rep_rr(0, z6, 'r.d', '%d RR-s in REF & DEL (to be deleted)' % num_rrs(z6))
-    rep_rr(0, z7, 'r..', '%d RR-s in ZREF only (surplus)' % num_rrs(z7))
+    log(0, '\n# INTERSECTION reports')
 
-    log(0, BAR2, 'INTERSECTION summary')
-    #
-    log(0, BAR1,
-    '''
+    log(0, '\nIn summary\n')
+    log(0,'```')
+    log(0, '''
     -a db.ADD <-+---------+=====+---------+-> -d db.DEL
                 |  1      |  2  |      3  |
                 |    +---------------+    |
@@ -687,10 +690,12 @@ def main():
                 +----|----+=====+----|----+
                      |       7       |
                      +---------------+-> -r db.REF (or DNS or both)
+
     ''')
+
     c = [-1, num_rrs(z1), num_rrs(z2), num_rrs(z3), num_rrs(z4),
          num_rrs(z5), num_rrs(z6), num_rrs(z7)]
-    fmt = '{0:<5}|{1:^5}|{2:^5}|{3:^5}|{4}'
+    fmt = '               {0:<5}|{1:^5}|{2:^5}|{3:^5}|{4}'
     log(0, fmt.format(  '', 'REF', 'ADD', 'DEL', '').replace('|',' '))
     log(0, fmt.format('','-----', '-----', '-----', '').replace('|','+'))
     log(0, fmt.format('.a.',    '',  c[1],    '', ' z1 : can be added'))
@@ -703,6 +708,22 @@ def main():
     log(0, fmt.format('','-----', '-----', '-----', '').replace('|','+'))
     log(0, fmt.format('tot', num_rrs(zref), num_rrs(zadd),
                       num_rrs(zdel),'').replace('|',' '))
+
+    log(0,'```')
+    rep_rr(0, z1, '#.',
+           '\n## z1, `%d` RR-s in ADD only (to be added)\n' % num_rrs(z1))
+    rep_rr(0, z2, '#.',
+           '\n## z2, `%d` RR-s in ADD & DEL (conflicts)\n' % num_rrs(z2))
+    rep_rr(0, z3, '#.',
+           '\n## z3, `%d` RR-s in DEL only (already deleted)\n' % num_rrs(z3))
+    rep_rr(0, z4, '#.',
+           '\n## z4, `%d` RR-s in REF and ADD (already added)\n' % num_rrs(z4))
+    rep_rr(0, z5, '#.',
+           '\n## z5, `%d` RR-s in REF,ADD & DEL (updates?)\n' % num_rrs(z5))
+    rep_rr(0, z6, '#.',
+           '\n## z6, `%d` RR-s in REF & DEL (to be deleted)\n' % num_rrs(z6))
+    rep_rr(0, z7, '#.',
+           '\n## z7, `%d` RR-s in ZREF only (surplus)\n' % num_rrs(z7))
 
 
     # write results to csv file if ARGS.o is not None and writeable
