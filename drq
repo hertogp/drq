@@ -200,6 +200,7 @@ def log_soa_rdta(level, name, rdta):
             '\n    + *min* `%d(%s)`' % (rdta.minimum, sec2str(rdta.minimum)))
 
 
+
 def log_opts(level, opts):
     'log configuration settings to output'
     log(level, '\n# OPTIONS used by drq\n')
@@ -289,7 +290,8 @@ def qry_ns(ns):
         return (ns_name, ns_ip)
 
     except dns.resolver.NXDOMAIN:
-        log(0, 'drq:FATAL:', 'could not find name/ip for nameserver', ns)
+        ARGS.D = True
+        dbg('FATAL:', 'could not find name/ip for nameserver', ns)
         sys.exit(0)
 
 def do_opts(argv):
@@ -589,71 +591,64 @@ def main():
     #   either via the system's resolver or against a nameserver given by -n
 
     # log a timestamp & soa's on all zones/nameservers involved
-    log(0, '---\n', 'title: Dns ReQuest check\n',
+    log(0, '---\n', 'title: RR set check\n',
         'author: at `%s [%s]`\n' % (ARGS.N, ARGS.n),
         'date: %s' % datetime.datetime.now().strftime('%Y-%m-%d, %H:%M:%S'),
         '\n...\n')
-    # log(0, '# TIMESTAMP')
-    # log(0, 'drq ran at `%s`' %
-    #     datetime.datetime.now().strftime('%Y-%m-%d, %H:%M:%S'))
 
     log_opts(2, ARGS)              # log all settings if requested
 
     # Create initial add/del/ref zones.
+    stats = {'ZADD': [], 'ZDEL': [], 'ZREF': []}  # collect output
     zadd = new_zone(ARGS.a)        # requested additions from file (if any)
-    zdel = new_zone(ARGS.d)        # requested deletions from file (if any)
     zref = new_zone(ARGS.r)        # reference zone from file (if any)
-    log(0, '\n# ZONE creation')
-    log(0, '\n## From file\n')
-    log(0, '- ZADD: `%3d` RR-s from file `%s`' % (num_rrs(zadd), ARGS.a or ''))
-    log(0, '- ZDEL: `%3d` RR-s from file `%s`' % (num_rrs(zdel), ARGS.d or ''))
-    log(0, '- ZREF: `%3d` RR-s from file `%s`' % (num_rrs(zref), ARGS.r or ''))
+    zdel = new_zone(ARGS.d)        # requested deletions from file (if any)
 
-    # add ptr-rr's based on a-rr's, if requested
+
+    stats['ZADD'].append('`%3d` RR-s from file `%s`' %
+                         (num_rrs(zadd), ARGS.a or ''))
     if ARGS.p:
-        log(0, '\n## Auto-adding PTR RR-s\n')
         old_size = num_rrs(zadd)
         zadd = expand_ptr(zadd)
-        log(0, '- ZADD now `%3d` RR-s by auto-adding `%2d` PTR RR-s' %
-            (num_rrs(zadd), num_rrs(zadd)-old_size))
+        stats['ZADD'].append('`%3d` PTR-s were auto-added' %
+                             (num_rrs(zadd)-old_size))
 
+    stats['ZDEL'].append('`%3d` RR-s from file `%s`' %
+                         (num_rrs(zdel), ARGS.d or ''))
+    if ARGS.p:
         old_size = num_rrs(zdel)
         zdel = expand_ptr(zdel)
-        log(0, '- ZDEL: now `%3d` RR-s by auto-adding `%2d` PTR RR-s' %
-            (num_rrs(zdel), num_rrs(zdel) - old_size))
+        stats['ZDEL'].append('`%3d` PTR-s were auto-added' %
+                             (num_rrs(zdel) - old_size))
 
-
+    stats['ZREF'].append('`%3d` RR-s from file `%s`' %
+                         (num_rrs(zref), ARGS.r or ''))
     old_size = num_rrs(zref)
     zref = trim_zone(zref, set().union(*[z.keys() for z in (zadd, zdel)]))
-    log(0, '\n## Pruning superfluous RR-s from ZREF\n')
-    log(0, '- ZREF: now `%3d` RR-s by pruning `%d` RR-s not in ZADD or ZDEL'
-        % (num_rrs(zref) - old_size, num_rrs(zref)))
+    stats['ZREF'].append('`%3d` RR-s were pruned (RR-s not in ZADD or ZDEL)' %
+        (num_rrs(zref) - old_size))
 
     if ARGS.q or not ARGS.r:
         # only if requested (-q) or no ZREF was given via -r db.ref
-        log(0, '\n## Expand ZREF with RR-s that are actually live\n')
         # Add live ZADD RR-s to ZREF (if any)
         zref_add = query_zone(zadd)
         zref = union_zones(zref, zref_add)
-        log(0, '- ZREF: now `%3d` RR-s by adding `%2d` live ZADD RR-s via %s [%s])' %
-            (num_rrs(zref), num_rrs(zref_add), ARGS.N, ARGS.n))
-        if num_rrs(zref_add):
-            rep_rr(3, zref_add, '    #.', '- ZREF: added `%d` live ZADD RR-s' %
-                   num_rrs(zref_add))
+        stats['ZREF'].append('`%3d` live ZADD RR-s were added via %s [%s])' %
+            (num_rrs(zref_add), ARGS.N, ARGS.n))
 
         # Add live ZDEL RR-s to ZREF (if any)
         zref_del = query_zone(zdel)
         zref = union_zones(zref, zref_del)
-        log(0, '- ZREF: now `%3d` RR-s by adding `%2d` live ZDEL RR-s via %s [%s])' %
-            (num_rrs(zref), num_rrs(zref_del), ARGS.N, ARGS.n))
-        if num_rrs(zref_del):
-            rep_rr(3, zref_del, '    #.', '- ZREF: added `%d` live ZDEL RR-s' %
-                   num_rrs(zref_del))
+        stats['ZADD'].append('`%3d` live ZDEL RR-s were added via %s [%s])' %
+            (num_rrs(zref_del), ARGS.N, ARGS.n))
 
-    log(0, '\n## Final results\n')
+    log(0, '\n# ZONE creation\n')
     log(0, '- ZADD: `%3d` RR-s' % num_rrs(zadd))
+    for msg in stats['ZADD']: log(0, '    +', msg)
     log(0, '- ZDEL: `%3d` RR-s' % num_rrs(zdel))
+    for msg in stats['ZDEL']: log(0, '    +', msg)
     log(0, '- ZREF: `%3d` RR-s' % num_rrs(zref))
+    for msg in stats['ZREF']: log(0, '    +', msg)
 
     # if asked, log zone rr's that will be reasoned with
     log(1, '\n# ZONES as created')
@@ -666,9 +661,17 @@ def main():
     if len(zoas.keys()):
         log(0, '\n# SOA listings')
         for zone, soas in zoas.items():
-            log(0, '\n## soas `%s`' % str(zone))
+            log(0, '\n## `%s`' % str(zone))
+            log(0, '|`%s`|' % zone, )
+            log(0, '|%s|' % ('-'*78))
+            if len(soas) == 0:
+                log(0, '|no soa data available|')
+
             for ns_name, ns_ip, ns_soa in soas:
-                log_soa_rdta(0, '@%s [%s]' % (ns_name, ns_ip), ns_soa)
+                # log_soa_rdta(0, '@%s [%s]' % (ns_name, ns_ip), ns_soa)
+                log(0, '|`%s %s` --> |' % (ns_name, ns_ip))
+                log(0, '|`%s`|' % ns_soa)
+                log(0, '||')
 
 
     z1, z25, z3 = trisect_zones(zadd, zdel)
@@ -678,38 +681,57 @@ def main():
     z7,  _, _ = trisect_zones(zref, union_zones(z4,z5,z6))
 
     # log records that are both in ADDs and DELs (ie inconsistent)
-    log(0, '\n# INTERSECTION reports')
+    log(0, '\n# INTERSECTIONs')
 
     log(0, '\nIn summary\n')
-    log(0,'```')
+    log(0,'```{dita} ')
     log(0, '''
-    -a db.ADD <-+---------+=====+---------+-> -d db.DEL
+                          +---------------+... -d db.DEL
+   -a db.ADD ...+---------|-----+         |
                 |  1      |  2  |      3  |
                 |    +---------------+    |
                 |    | 4  |  5  |  6 |    |
-                +----|----+=====+----|----+
+                +----|----+-----+----|----+
                      |       7       |
-                     +---------------+-> -r db.REF (or DNS or both)
-
+                     +---------------+...-r db.REF (or DNS or both)
     ''')
+    log(0,'```')
 
+    # Create a summary table overview of resulting intersections
     c = [-1, num_rrs(z1), num_rrs(z2), num_rrs(z3), num_rrs(z4),
          num_rrs(z5), num_rrs(z6), num_rrs(z7)]
-    fmt = '               {0:<5}|{1:^5}|{2:^5}|{3:^5}|{4}'
-    log(0, fmt.format(  '', 'REF', 'ADD', 'DEL', '').replace('|',' '))
-    log(0, fmt.format('','-----', '-----', '-----', '').replace('|','+'))
-    log(0, fmt.format('.a.',    '',  c[1],    '', ' z1 : can be added'))
-    log(0, fmt.format('.ad',    '',  c[2],  c[2], ' z2 : add/del conflict'))
-    log(0, fmt.format('..d',    '',   '',   c[3], ' z3 : already deleted'))
-    log(0, fmt.format('ra.',  c[4],  c[4],    '', ' z4 : already added'))
-    log(0, fmt.format('rad',  c[5],  c[5],  c[5], ' z5 : possible updates'))
-    log(0, fmt.format('r.d',  c[6],   '',   c[6], ' z6 : can be deleted'))
-    log(0, fmt.format('r..',  c[7],   '',     '', ' z7 : ref surplus'))
-    log(0, fmt.format('','-----', '-----', '-----', '').replace('|','+'))
-    log(0, fmt.format('tot', num_rrs(zref), num_rrs(zadd),
-                      num_rrs(zdel),'').replace('|',' '))
+    w = max(len(str(x)) for x in c)
+    w = w if w > 5 else 5
 
-    log(0,'```')
+    fmt = '|{1:^{0}}|{2:^{0}}|{3:^{0}}|{4:^{0}}|{5}|'
+    hdr = ''.join([':','-'*(w-2),':'])
+    log(0, fmt.format(w, 'RAD', 'REF', 'ADD', 'DEL', ' REMARK             '))
+    log(0, fmt.format(w,   hdr,   hdr,   hdr,   hdr, ':-------------------'))
+    log(0, fmt.format(w, '.a.',    '',  c[1],    '', ' 1) can be added    '))
+    log(0, fmt.format(w, '.ad',    '',  c[2],  c[2], ' 2) add/del conflict'))
+    log(0, fmt.format(w, '..d',    '',   '',   c[3], ' 3) already deleted '))
+    log(0, fmt.format(w, 'ra.',  c[4],  c[4],    '', ' 4) already added   '))
+    log(0, fmt.format(w, 'rad',  c[5],  c[5],  c[5], ' 5) possible updates'))
+    log(0, fmt.format(w, 'r.d',  c[6],   '',   c[6], ' 6) can be deleted  '))
+    log(0, fmt.format(w, 'r..',  c[7],   '',     '', ' 7) ref surplus     '))
+    log(0, '\nTable: summary overview of ref/add/del intersections.')
+
+
+
+    # fmt = '               {0:<5}|{1:^5}|{2:^5}|{3:^5}|{4}'
+    # log(0, fmt.format(  '', 'REF', 'ADD', 'DEL', '').replace('|',' '))
+    # log(0, fmt.format('','-----', '-----', '-----', '').replace('|','+'))
+    # log(0, fmt.format('.a.',    '',  c[1],    '', ' z1 : can be added'))
+    # log(0, fmt.format('.ad',    '',  c[2],  c[2], ' z2 : add/del conflict'))
+    # log(0, fmt.format('..d',    '',   '',   c[3], ' z3 : already deleted'))
+    # log(0, fmt.format('ra.',  c[4],  c[4],    '', ' z4 : already added'))
+    # log(0, fmt.format('rad',  c[5],  c[5],  c[5], ' z5 : possible updates'))
+    # log(0, fmt.format('r.d',  c[6],   '',   c[6], ' z6 : can be deleted'))
+    # log(0, fmt.format('r..',  c[7],   '',     '', ' z7 : ref surplus'))
+    # log(0, fmt.format('','-----', '-----', '-----', '').replace('|','+'))
+    # log(0, fmt.format('tot', num_rrs(zref), num_rrs(zadd),
+    #                   num_rrs(zdel),'').replace('|',' '))
+
     rep_rr(0, z1, '#.',
            '\n## z1, `%d` RR-s in ADD only (to be added)\n' % num_rrs(z1))
     rep_rr(0, z2, '#.',
