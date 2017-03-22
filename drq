@@ -610,7 +610,7 @@ def main():
     if ARGS.p:
         old_size = num_rrs(zadd)
         zadd = expand_ptr(zadd)
-        stats['ZADD'].append('`%3d` PTR-s were auto-added' %
+        stats['ZADD'].append('`%3d` PTR RR-s auto-added' %
                              (num_rrs(zadd)-old_size))
 
     stats['ZDEL'].append('`%3d` RR-s from file `%s`' %
@@ -618,14 +618,14 @@ def main():
     if ARGS.p:
         old_size = num_rrs(zdel)
         zdel = expand_ptr(zdel)
-        stats['ZDEL'].append('`%3d` PTR-s were auto-added' %
+        stats['ZDEL'].append('`%3d` PTR RR-s auto-added' %
                              (num_rrs(zdel) - old_size))
 
     stats['ZREF'].append('`%3d` RR-s from file `%s`' %
                          (num_rrs(zref), ARGS.r or ''))
     old_size = num_rrs(zref)
     zref = trim_zone(zref, set().union(*[z.keys() for z in (zadd, zdel)]))
-    stats['ZREF'].append('`%3d` RR-s were pruned (RR-s not in ZADD or ZDEL)' %
+    stats['ZREF'].append('`%3d` RR-s pruned (i.e. not in ZADD or ZDEL)' %
         (num_rrs(zref) - old_size))
 
     if ARGS.q or not ARGS.r:
@@ -633,13 +633,13 @@ def main():
         # Add live ZADD RR-s to ZREF (if any)
         zref_add = query_zone(zadd)
         zref = union_zones(zref, zref_add)
-        stats['ZREF'].append('`%3d` live ZADD RR-s were added via %s [%s])' %
+        stats['ZREF'].append('`%3d` live ZADD RR-s retrieved from %s [%s])' %
             (num_rrs(zref_add), ARGS.N, ARGS.n))
 
         # Add live ZDEL RR-s to ZREF (if any)
         zref_del = query_zone(zdel)
         zref = union_zones(zref, zref_del)
-        stats['ZADD'].append('`%3d` live ZDEL RR-s were added via %s [%s])' %
+        stats['ZADD'].append('`%3d` live ZDEL RR-s retrieved from %s [%s])' %
             (num_rrs(zref_del), ARGS.N, ARGS.n))
 
     log(0, '\n# ZONE creation\n')
@@ -662,17 +662,17 @@ def main():
         log(0, '\n# SOA listings')
         for zone, soas in zoas.items():
             log(0, '\n## `%s`' % str(zone))
-            log(0, '|`%s`|' % zone, )
-            log(0, '|%s|' % ('-'*78))
+            # log(0, '|`_**%s**_`|' % zone, )
+            log(0, '|ns ip --> *origin contact serial refresh retry expire minimum*')
+            log(0, '|%s|' % ('-'*77))
             if len(soas) == 0:
-                log(0, '|no soa data available|')
+                log(0, '|*no soa data available*|')
 
             for ns_name, ns_ip, ns_soa in soas:
-                # log_soa_rdta(0, '@%s [%s]' % (ns_name, ns_ip), ns_soa)
                 log(0, '|`%s %s` --> |' % (ns_name, ns_ip))
-                log(0, '|`%s`|' % ns_soa)
+                # ns_soa might be none, so don't use ns_soa.to_text()
+                log(0, '|`%s`|' % ns_soa) # won't have @ in contact e-mail
                 log(0, '||')
-
 
     z1, z25, z3 = trisect_zones(zadd, zdel)
     z1, z4, _ = trisect_zones(z1, zref)
