@@ -4,61 +4,68 @@
 # license: see file LICENSE or <http://unlicense.org>
 
 '''
-Dns ReQuest checker - check intersections of ref/add/del-zones
+NAME
 
-usage: drq {-a db.add | -d db.ref} [options]
+ drq - a Dns ReQuest checker which shows intersections of 3 zones: ADD,DEL & REF
 
- with at least one of:
- -a db.add  zone file with records to add
- -d db.del  zone file with records to delete
+ usage: drq {-a db.add | -d db.del} [options]
 
- options include:
+SYNOPSIS
 
+ -a db.add  zone file with records that should exist (add)
+ -d db.del  zone file with records that should not exist (del)
  -r db.ref  zone file against which additions/removals are checked
  -q         query DNS to check add/del records (even if -r db.ref was given)
  -c <num>   use <num> concurrent dns queries [default is 5]
- -n ns      name server ip to be queried instead of default resolver
+ -n ns      name server to be used instead of the system's default resolver
  -t         use tcp/53 queries instead of udp/53 queries
  -p         include/create PTR-records for A-records to add/del
  -s         strict checking, require ttl's to match as well
  -D         print debugging info
- -v <num>   verbosity level
+ -v <num>   verbosity level (default 0)
+            0: output zone stats, SOAs (if any), intersections of ADD/DEL/REF
+            1: also output ADD/DEL/REF zones as created for intersections
+            2: also output options used
+            3: also output usage information
+
  -h         print this message and exit
 
+ -a <filename> (e.g. db.add)
+    The set of RR-s that should exist and may have to be added to DNS (bind zone
+    file format)
 
- -a db.add
-    The set of RR-s that should be added to DNS (bind zone file format)
+ -d <filename> (e.g. db.del)
+    The set of RR-s that should not exist and may have to be removed from DNS
+    (bind zone file format)
 
- -d db.del
-    The set of RR-s that should be removed from DNS (bind zone file format)
-
- -r db.ref
-    Off-line representation of 'live' DNS records (if not given, -q is implied)
+ -r <filename> (e.g. db.ref)
+    Off-line representation of 'live'/'reference' DNS records (if not given, -q
+    is implied). RR-s in this db.ref and not in (db.add or db.del) are
+    meaningless for intersections and are pruned away in advance.
 
  -q
     Query DNS to see of whether records proposed for addition (-a db.add)
     still need to be added (or not) and/or whether records proposed for deletion
     (-d db.del) still need to be removed (or not). If no -r db.ref is used, this
     option is implied (i.e. dns will be queried). This option can be used in
-    addition to specifying a -r db.ref as well, in this case it'll check SOA
-    records as well.
+    addition to specifying a -r db.ref as well.
 
  -c <num>
     Maximum number of concurrent sessions to use when sending out DNS queries.
     Defaults to 5.  You might want to lower this if using an ssh tunnel to
     direct tcp-based queries via a stepping stone onto a dns server.
 
- -n ns
-    Donot use the system's default resolver, use the nameserver ns (name or an
+ -n <ns>
+    Instead of the system's default resolver, use the nameserver <ns> (name or
     ip address) instead.  Useful if your local system's idea of how to resolve
-    names does not suit your purpose.
+    names does not suit your purposes.
 
  -t
     Use tcp/53 to query nameservers instead of udp/53.  Mainly useful for
     proxying DNS queries via a remote jumphost using e.g. proxychains:
 
         $ ssh -fND 22222 your_acct@jumphost
-        $ proxychains drq -r db.ref -a db.add -n <remote_ns_ip> -t
+        $ proxychains drq -r db.ref -a db.add -n <remote_ns> -t
 
     -> 22222/tcp is the local port where proxychains expects its socks server
     (searches ./proxychains.conf, $HOME/.proxychains/proxychains.conf and
@@ -68,8 +75,16 @@ usage: drq {-a db.add | -d db.ref} [options]
     running.  Connection timeout's usually mean the -t was not given which means
     drq is using udp/53 which doesn't get proxied.
 
- -o file.csv
-    Write results to file.csv (in csv format)
+ -o <file.csv>
+    Write results to <file.csv> with headers:
+
+        name; type; data; RAD; description
+
+    where RAD is a three letter code indicating the zone(s) in which the RR
+    occurs in, e.g. `r..` for a REF-only record, or 'rad' when it occurs in all
+    three zones.  You get the idea.  The actual ADD, DEL and REF zones used to
+    determine the intersections are listed as well using 'add', 'del' and 'ref'
+    as their 3-letter code (see below).
 
  -p
     Automatically add PTR-records for each A-record to be checked.  Sometimes
@@ -78,43 +93,71 @@ usage: drq {-a db.add | -d db.ref} [options]
 
  -s
     Strict checking requires ttl's to match as well when comparing RR-s. Not
-    used normally, but might be just what is needed to check TTL's for RR-s.
+    used normally, but does allow for checking TTL's in use for specific RR-s.
 
  -D
     Print some extra (debugging) info to stderr.
 
  -v <num>
-    Controls the level of informational messages printed to stdout.  Defaults to
-    0, which doesn't clutter the reports too much.
+    Controls the level of additional information in generated output (see above).
 
 
- SUMMARY
+DESCRIPTION
 
-  Take db.add, db.del & db.ref and determine the intersections.
+ drq [options]
 
-  If no db.ref is given, it is created by trying to resolve the db.add and
-  db.del records, otherwise it uses the db.ref given.  Uses the system's default
-  resolver or the one supplied via -n <ns>.  Use -q to grow db.ref even if
-  given. Before intersections are calculated, db.ref only records are pruned.
+ builds 3 zones:
+ - ADD: from file db.add, RR-s that should exist (addition candidates)
+ - DEL: from file db.del, RR-s that should not exist (deletion candidates)
+ - REF: from file db.ref and/or DNS, RR-s that represent 'reality'
 
-      -a db.ADD <-+---------+=====+---------+-> -d db.DEL
-                  |  1      |  2  |      3  |
-                  |    +---------------+    |
-                  |    | 4  |  5  |  6 |    |
-                  +----|----+=====+----|----+
-                       |       7       |
-                       +---------------+-> -r db.REF (or DNS or both)
+ and calculates the intersections of the 3 zones:
 
+                         +---------------+... -d db.DEL
+  -a db.ADD ...+---------|-----+         |
+               |  1      |  2  |      3  |
+               |    +---------------+    |
+               |    | 4  |  5  |  6 |    |
+               +----|----+-----+----|----+
+                    |       7       |
+                    +---------------+...-r db.REF (and/or DNS)
 
-     Zx   RAD  Description        Meaning
-     --  ----  ------------------ -------------------------------------------
-     z1  '.a.' can be added       RR-s can be added as new to REF
-     z2  '.ad' possible conflict  RR-s not in REF so add/del is strange
-     z3  '..d' cannot delete      RR-s not in REF, so no removal possible
-     z4  'ra.' cannot add         RR-s in REF, so no new add possible
-     z5  'rad' possible updates   RR-s in ALL zones, so del/add is possible
-     z6  'r.d' can be deleted     RR-s can be deleted from REF
-     z7  'r..' ref surplus        RR-s weren't pruned for some reason
+    Zx   RAD  Description        Meaning
+    --  ----  ------------------ -------------------------------------------
+    z1  '.a.' can be added       RR-s in ADD only, so addition is possible
+    z2  '.ad' possible conflict  RR-s in ADD & DEL only, which is strange
+    z3  '..d' cannot delete      RR-s in DEL only, so no removal possible
+    z4  'ra.' cannot add         RR-s in ADD & REF, so no _new_ add possible
+    z5  'rad' possible updates   RR-s in ALL zones, so del/add is possible
+    z6  'r.d' can be deleted     RR-s in REF & DEL, so deletion is possible
+    z7  'r..' ref surplus        RR-s weren't pruned for some reason
+
+ The db.{add,del,ref} are in bind-zone file format, so $ORIGIN can be used to
+ define multiple zones in 1 db-file.  All names are taken relative to '.' or
+ any $ORIGIN in effect.
+
+ Next, a list is built of the various zones the resulting collective of names
+ belong to and an attempt is made to retrieve the zone SOA records from the
+ relevant nameservers.  To do so, the system's default resolver is used to map
+ the nameserver name to an ip address, even if a target nameserver is given by
+ the -n <ns> option since it might not be authoritative for the zone the given
+ nameserver is in.  This holds especially true for any reverse zones, e.g. when
+ using the -p option which auto-adds PTR RR-s for any A-record found.
+
+ A markdown formatted report is printed to stdout, mostly consisting of some
+ stats on the ADD, DEL en REF zone creation, the nameservers and SOA records
+ for a zone (if any were found), followed by the intersections described above.
+
+ So if records need to be added and/or deleted from some zone, the set of
+ records can easily be checked by supplying them as bind-zone files and point
+ the script at the nameserver in question (using -n <ns>).
+
+HISTORY
+
+ Created to be able to provide clean add/delete requests to DNS admins while
+ deploying large numbers of server clusters that carried a lot of new names and
+ sometimes changes in existing names (for which the dns admin required separate
+ delete and add requests).
 
 '''
 
@@ -183,6 +226,13 @@ def log(level=0, *words):
     print >> sys.stdout, ' '.join(str(w) for w in words)
     sys.stdout.flush()
 
+def log_usage(level):
+    if level > ARGS.v: return
+    log(level,'\n# Usage')
+    log(level,'```')
+    log(level, __doc__)
+    log(level,'```')
+
 def log_soa_rdta(level, name, rdta):
     'log soa record for name(server)'
     if rdta is None:
@@ -203,18 +253,21 @@ def log_soa_rdta(level, name, rdta):
 
 def log_opts(level, opts):
     'log configuration settings to output'
-    log(level, '\n# OPTIONS used by drq\n')
-    log(level, '- file with ADD-records,   -a', opts.a or "''")
-    log(level, '- file with DEL-records,   -d', opts.d or "''")
-    log(level, '- file with REF-records,   -r', opts.r or "''")
-    log(level, '- ns for REF-records,      -n', opts.N, opts.n)
-    log(level, '- auto-add ptr-records,    -p', opts.p)
-    log(level, '- max concurrent requests, -c', opts.c)
-    log(level, '- force retrieval for REF, -q', opts.q)
-    log(level, '- use 53/tcp for queries,  -t', opts.t)
-    log(level, '- use strict checking,     -s', opts.s)
-    log(level, '- provide debug output,    -D', opts.D)
-    log(level, '- verbosity of output,     -v', opts.v)
+    log(level, '\n# OPTIONS used\n')
+    log(level, '| Meaning                | Option | Value |')
+    log(level, '|:-----------------------|:-------|:------|')
+    log(level, '| file with ADD-records  |  `-a`  |  `%s` |' % opts.a)
+    log(level, '| file with DEL-records  |  `-d`  |  `%s` |' % opts.d)
+    log(level, '| file with REF-records  |  `-r`  |  `%s` |' % opts.r)
+    log(level, '| ns for REF-records     |  `-n`  |  `%s (%s)` |' % (opts.n,
+                                                                     opts.N))
+    log(level, '| auto-add ptr-records   |  `-p`  |  `%s` |' % opts.p)
+    log(level, '| max concurrent requests|  `-c`  |  `%s` |' % opts.c)
+    log(level, '| force retrieval for REF|  `-q`  |  `%s` |' % opts.q)
+    log(level, '| use 53/tcp for queries |  `-t`  |  `%s` |' % opts.t)
+    log(level, '| use strict checking    |  `-s`  |  `%s` |' % opts.s)
+    log(level, '| provide debug output   |  `-D`  |  `%s` |' % opts.D)
+    log(level, '| verbosity of output    |  `-v`  |  `%s` |' % opts.v)
 
 
 def rep_rr(level, zone, prefix='', title=None):
@@ -639,7 +692,7 @@ def main():
         # Add live ZDEL RR-s to ZREF (if any)
         zref_del = query_zone(zdel)
         zref = union_zones(zref, zref_del)
-        stats['ZADD'].append('`%3d` live ZDEL RR-s retrieved from %s [%s])' %
+        stats['ZREF'].append('`%3d` live ZDEL RR-s retrieved from %s [%s])' %
             (num_rrs(zref_del), ARGS.N, ARGS.n))
 
     log(0, '\n# ZONE creation\n')
@@ -651,7 +704,7 @@ def main():
     for msg in stats['ZREF']: log(0, '    +', msg)
 
     # if asked, log zone rr's that will be reasoned with
-    log(1, '\n# ZONES as created')
+    log(1, '\n# ZONES created')
     rep_rr(1, zadd, '#.', '\n## ADD RR-s (from file)\n')
     rep_rr(1, zdel, '#.', '\n## DEL RR-s (from file)\n')
     rep_rr(1, zref, '#.', '\n## REF RR-s (from file/dns)\n')
@@ -659,7 +712,7 @@ def main():
     # SOA checks at target NS
     zoas = get_soas(zref, zadd, zdel)
     if len(zoas.keys()):
-        log(0, '\n# SOA listings')
+        log(0, '\n# ZONES & NS SOA\'s')
         for zone, soas in zoas.items():
             log(0, '\n## `%s`' % str(zone))
             # log(0, '|`_**%s**_`|' % zone, )
@@ -697,7 +750,7 @@ def main():
     ''')
     log(0,'```')
 
-    # Create a summary table overview of resulting intersections
+    # log summary table overview of resulting intersections
     c = [-1, num_rrs(z1), num_rrs(z2), num_rrs(z3), num_rrs(z4),
          num_rrs(z5), num_rrs(z6), num_rrs(z7)]
     w = max(len(str(x)) for x in c)
@@ -717,21 +770,7 @@ def main():
     log(0, '\nTable: summary overview of ref/add/del intersections.')
 
 
-
-    # fmt = '               {0:<5}|{1:^5}|{2:^5}|{3:^5}|{4}'
-    # log(0, fmt.format(  '', 'REF', 'ADD', 'DEL', '').replace('|',' '))
-    # log(0, fmt.format('','-----', '-----', '-----', '').replace('|','+'))
-    # log(0, fmt.format('.a.',    '',  c[1],    '', ' z1 : can be added'))
-    # log(0, fmt.format('.ad',    '',  c[2],  c[2], ' z2 : add/del conflict'))
-    # log(0, fmt.format('..d',    '',   '',   c[3], ' z3 : already deleted'))
-    # log(0, fmt.format('ra.',  c[4],  c[4],    '', ' z4 : already added'))
-    # log(0, fmt.format('rad',  c[5],  c[5],  c[5], ' z5 : possible updates'))
-    # log(0, fmt.format('r.d',  c[6],   '',   c[6], ' z6 : can be deleted'))
-    # log(0, fmt.format('r..',  c[7],   '',     '', ' z7 : ref surplus'))
-    # log(0, fmt.format('','-----', '-----', '-----', '').replace('|','+'))
-    # log(0, fmt.format('tot', num_rrs(zref), num_rrs(zadd),
-    #                   num_rrs(zdel),'').replace('|',' '))
-
+    # log RR-s per intersection as a markdown numbered list (#.)
     rep_rr(0, z1, '#.',
            '\n## z1, `%d` RR-s in ADD only (to be added)\n' % num_rrs(z1))
     rep_rr(0, z2, '#.',
@@ -748,8 +787,10 @@ def main():
            '\n## z7, `%d` RR-s in ZREF only (surplus)\n' % num_rrs(z7))
 
 
+    log_usage(3)
+
     # write results to csv file if ARGS.o is not None and writeable
-    if not ARGS.o is None:
+    if ARGS.o is not None:
         ofh = open(ARGS.o, 'w')
         csv_rr(ofh, z1, '.a.', 'can be added', header=True)
         csv_rr(ofh, z2, '.ad', 'possible conflict')
@@ -758,6 +799,9 @@ def main():
         csv_rr(ofh, z5, 'rad', 'possible updates')
         csv_rr(ofh, z6, 'r.d', 'can be deleted')
         csv_rr(ofh, z7, 'r..', 'ref surplus')
+        csv_rr(ofh, zadd, 'add', 'db.add')
+        csv_rr(ofh, zdel, 'del', 'db.del')
+        csv_rr(ofh, zref, 'ref', 'db.ref')
         ofh.close()
 
 if __name__ == '__main__':
