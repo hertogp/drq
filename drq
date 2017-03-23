@@ -6,20 +6,20 @@
 '''
 NAME
 
- drq - a Dns ReQuest checker which shows intersections of 3 zones: ADD,DEL & REF
-
- usage: drq {-a db.add | -d db.del} [options]
+ drq - a Dns ReQuest checker, shows intersections of 3 zones: ADD, DEL & REF
 
 SYNOPSIS
 
+ usage: drq {-a db.add | -d db.del} [options]
+
  -a db.add  zone file with records that should exist (add)
  -d db.del  zone file with records that should not exist (del)
- -r db.ref  zone file against which additions/removals are checked
+ -r db.ref  zone file against which add/del's are checked
  -q         query DNS to check add/del records (even if -r db.ref was given)
  -c <num>   use <num> concurrent dns queries [default is 5]
  -n ns      name server to be used instead of the system's default resolver
  -t         use tcp/53 queries instead of udp/53 queries
- -p         include/create PTR-records for A-records to add/del
+ -p         include/create PTR-records for any A-records in add/del
  -s         strict checking, require ttl's to match as well
  -D         print debugging info
  -v <num>   verbosity level (default 0)
@@ -27,8 +27,8 @@ SYNOPSIS
             1: also output ADD/DEL/REF zones as created for intersections
             2: also output options used
             3: also output usage information
-
  -h         print this message and exit
+
 
  -a <filename> (e.g. db.add)
     The set of RR-s that should exist and may have to be added to DNS (bind zone
@@ -130,7 +130,7 @@ DESCRIPTION
     z4  'ra.' cannot add         RR-s in ADD & REF, so no _new_ add possible
     z5  'rad' possible updates   RR-s in ALL zones, so del/add is possible
     z6  'r.d' can be deleted     RR-s in REF & DEL, so deletion is possible
-    z7  'r..' ref surplus        RR-s weren't pruned for some reason
+    z7  'r..' ref surplus        RR-s added after initial pruning
 
  The db.{add,del,ref} are in bind-zone file format, so $ORIGIN can be used to
  define multiple zones in 1 db-file.  All names are taken relative to '.' or
@@ -141,10 +141,9 @@ DESCRIPTION
  relevant nameservers.  To do so, the system's default resolver is used to map
  the nameserver name to an ip address, even if a target nameserver is given by
  the -n <ns> option since it might not be authoritative for the zone the given
- nameserver is in.  This holds especially true for any reverse zones, e.g. when
- using the -p option which auto-adds PTR RR-s for any A-record found.
+ nameserver is in and it might not provide recursive DNS.
 
- A markdown formatted report is printed to stdout, mostly consisting of some
+ A report in markdown format is printed to stdout, mostly consisting of some
  stats on the ADD, DEL en REF zone creation, the nameservers and SOA records
  for a zone (if any were found), followed by the intersections described above.
 
@@ -155,9 +154,9 @@ DESCRIPTION
 HISTORY
 
  Created to be able to provide clean add/delete requests to DNS admins while
- deploying large numbers of server clusters that carried a lot of new names and
- sometimes changes in existing names (for which the dns admin required separate
- delete and add requests).
+ deploying large numbers of server clusters that required a lot of new names
+ and sometimes changes in existing names (for which the dns admin required
+ separate delete and add requests).
 
 '''
 
