@@ -171,7 +171,8 @@ Which basically says:
 
 - www.acme.com entry was listed (same entry) in both add/del db's
 - www.example.com and www.acme.com were already added (ie they were in dns)
-- not added were the addthis records, because they were not seen in dns
+- not added were the `addthis.{acme,example}.com` records, because they were
+  not seen in dns
 - ftp.example.com was already deleted (at least not in dns right now)
 - www.acme.com is not yet deleted (still in dns)
 
